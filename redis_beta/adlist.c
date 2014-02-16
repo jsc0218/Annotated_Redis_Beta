@@ -12,10 +12,8 @@
  * On error, NULL is returned. Otherwise the pointer to the new list. */
 list *listCreate(void)
 {
-    struct list *list;
-
-    if ((list = malloc(sizeof(*list))) == NULL)
-        return NULL;
+    struct list *list = malloc(sizeof(*list));
+    if (list == NULL) return NULL;
     list->head = list->tail = NULL;
     list->len = 0;
     list->dup = NULL;
@@ -29,13 +27,10 @@ list *listCreate(void)
  * This function can't fail. */
 void listRelease(list *list)
 {
-    int len;
-    listNode *current, *next;
-
-    current = list->head;
-    len = list->len;
-    while(len--) {
-        next = current->next;
+    listNode *current = list->head;
+    int len = list->len;
+    while (len--) {
+    	listNode *next = current->next;
         if (list->free) list->free(current->value);
         free(current);
         current = next;
@@ -43,7 +38,7 @@ void listRelease(list *list)
     free(list);
 }
 
-/* Add a new node to the list, to head, contaning the specified 'value'
+/* Add a new node to the list, to head, containing the specified 'value'
  * pointer as value.
  *
  * On error, NULL is returned and no operation is performed (i.e. the
@@ -51,10 +46,8 @@ void listRelease(list *list)
  * On success the 'list' pointer you pass to the function is returned. */
 list *listAddNodeHead(list *list, void *value)
 {
-    listNode *node;
-
-    if ((node = malloc(sizeof(*node))) == NULL)
-        return NULL;
+    listNode *node = malloc(sizeof(*node));
+    if (node == NULL) return NULL;
     node->value = value;
     if (list->len == 0) {
         list->head = list->tail = node;
@@ -69,7 +62,7 @@ list *listAddNodeHead(list *list, void *value)
     return list;
 }
 
-/* Add a new node to the list, to tail, contaning the specified 'value'
+/* Add a new node to the list, to tail, containing the specified 'value'
  * pointer as value.
  *
  * On error, NULL is returned and no operation is performed (i.e. the
@@ -77,10 +70,8 @@ list *listAddNodeHead(list *list, void *value)
  * On success the 'list' pointer you pass to the function is returned. */
 list *listAddNodeTail(list *list, void *value)
 {
-    listNode *node;
-
-    if ((node = malloc(sizeof(*node))) == NULL)
-        return NULL;
+    listNode *node = malloc(sizeof(*node));
+    if (node == NULL) return NULL;
     node->value = value;
     if (list->len == 0) {
         list->head = list->tail = node;
@@ -101,14 +92,10 @@ list *listAddNodeTail(list *list, void *value)
  * This function can't fail. */
 void listDelNode(list *list, listNode *node)
 {
-    if (node->prev)
-        node->prev->next = node->next;
-    else
-        list->head = node->next;
-    if (node->next)
-        node->next->prev = node->prev;
-    else
-        list->tail = node->prev;
+    if (node->prev) node->prev->next = node->next;
+    else list->head = node->next;
+    if (node->next) node->next->prev = node->prev;
+    else list->tail = node->prev;
     if (list->free) list->free(node->value);
     free(node);
     list->len--;
@@ -120,13 +107,10 @@ void listDelNode(list *list, listNode *node)
  * This function can't fail. */
 listIter *listGetIterator(list *list, int direction)
 {
-    listIter *iter;
-    
-    if ((iter = malloc(sizeof(*iter))) == NULL) return NULL;
-    if (direction == AL_START_HEAD)
-        iter->next = list->head;
-    else
-        iter->next = list->tail;
+    listIter *iter = malloc(sizeof(*iter));
+    if (iter == NULL) return NULL;
+    if (direction == AL_START_HEAD) iter->next = list->head;
+    else iter->next = list->tail;
     iter->direction = direction;
     return iter;
 }
@@ -145,7 +129,7 @@ void listReleaseIterator(listIter *iter) {
  * is:
  *
  * iter = listGetItarotr(list,<direction>);
- * while ((node = listNextIterator(iter)) != NULL) {
+ * while ((node = listNextElement(iter)) != NULL) {
  *     DoSomethingWith(listNodeValue(node));
  * }
  *
@@ -153,12 +137,9 @@ void listReleaseIterator(listIter *iter) {
 listNode *listNextElement(listIter *iter)
 {
     listNode *current = iter->next;
-
     if (current != NULL) {
-        if (iter->direction == AL_START_HEAD)
-            iter->next = current->next;
-        else
-            iter->next = current->prev;
+        if (iter->direction == AL_START_HEAD) iter->next = current->next;
+        else iter->next = current->prev;
     }
     return current;
 }
@@ -173,19 +154,15 @@ listNode *listNextElement(listIter *iter)
  * The original list both on success or error is never modified. */
 list *listDup(list *orig)
 {
-    list *copy;
-    listIter *iter;
-    listNode *node;
-
-    if ((copy = listCreate()) == NULL)
-        return NULL;
+    list *copy = listCreate();
+    if (copy == NULL) return NULL;
     copy->dup = orig->dup;
     copy->free = orig->free;
     copy->match = orig->match;
-    iter = listGetIterator(orig, AL_START_HEAD);
+    listIter *iter = listGetIterator(orig, AL_START_HEAD);
+    listNode *node;
     while((node = listNextElement(iter)) != NULL) {
         void *value;
-
         if (copy->dup) {
             value = copy->dup(node->value);
             if (value == NULL) {
@@ -193,8 +170,9 @@ list *listDup(list *orig)
                 listReleaseIterator(iter);
                 return NULL;
             }
-        } else
-            value = node->value;
+        } else {
+        	value = node->value;
+        }
         if (listAddNodeTail(copy, value) == NULL) {
             listRelease(copy);
             listReleaseIterator(iter);
@@ -216,10 +194,8 @@ list *listDup(list *orig)
  * NULL is returned. */
 listNode *listSearchKey(list *list, void *key)
 {
-    listIter *iter;
+    listIter *iter = listGetIterator(list, AL_START_HEAD);
     listNode *node;
-
-    iter = listGetIterator(list, AL_START_HEAD);
     while((node = listNextElement(iter)) != NULL) {
         if (list->match) {
             if (list->match(node->value, key)) {
@@ -244,14 +220,13 @@ listNode *listSearchKey(list *list, void *key)
  * and so on. If the index is out of range NULL is returned. */
 listNode *listIndex(list *list, int index) {
     listNode *n;
-
     if (index < 0) {
         index = (-index)-1;
         n = list->tail;
-        while(index-- && n) n = n->prev;
+        while (index-- && n) n = n->prev;
     } else {
         n = list->head;
-        while(index-- && n) n = n->next;
+        while (index-- && n) n = n->next;
     }
     return n;
 }

@@ -16,9 +16,9 @@ typedef struct listNode {
 typedef struct list {
     listNode *head;
     listNode *tail;
-    void *(*dup)(void *ptr);
-    void (*free)(void *ptr);
-    int (*match)(void *ptr, void *key);
+    void *(*dup)(void *ptr);  // copy the value in the list's node
+    void (*free)(void *ptr);  // free the value in the list's node
+    int (*match)(void *ptr, void *key);  // match the value in the list's node
     int len;
 } list;
 
