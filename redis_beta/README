@@ -57,7 +57,11 @@ order to implement distributed algorithms.
 MULTIPLE DATABASES SUPPORT
 ==========================
 
-Another synchronization primitive is the support for multiple DBs. By default DB 0 is selected for every new connection, but using the SELECT command it is possible to select a different database. The MOVE operation can move an item from one DB to another atomically. This can be used as a base for locking free algorithms together with the 'RANDOMKEY' or 'POPRANDOMKEY' commands.
+Another synchronization primitive is the support for multiple DBs. By default 
+DB 0 is selected for every new connection, but using the SELECT command it is 
+possible to select a different database. The MOVE operation can move an item 
+from one DB to another atomically. This can be used as a base for locking free 
+algorithms together with the 'RANDOMKEY' or 'POPRANDOMKEY' commands.
 
 ================
 REDIS DATA TYPES
@@ -67,10 +71,14 @@ Redis support the following three data types as values:
 
 - Strings: just any sequence of bytes. Redis strings are binary safe so they
   can not just hold text, but images, compressed data and everything else.
-- Lists: lists of strings, with support for operations like append a new string on head, on tail, list length, obtain a range of elements, truncate the list to a given length, sort the list, and so on.
-- Sets: an unsorted set of strings. It is possible to add or delete elements from a set, to perform set intersection, union, subtraction, and so on.
+- Lists: lists of strings, with support for operations like append a new string 
+  on head, on tail, list length, obtain a range of elements, truncate the list 
+  to a given length, sort the list, and so on.
+- Sets: an unsorted set of strings. It is possible to add or delete elements 
+  from a set, to perform set intersection, union, subtraction, and so on.
 
-Values can be Strings, Lists or Sets. Keys can be a subset of strings not containing newlines ("\n") and spaces (" ").
+Values can be Strings, Lists or Sets. Keys can be a subset of strings not 
+containing newlines ("\n") and spaces (" ").
 
 Note that sometimes strings may hold numeric vaules that must be parsed by
 Redis. An example is the INCR command that atomically increments the number
