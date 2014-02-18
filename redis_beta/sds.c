@@ -187,11 +187,11 @@ sds sdsrange(sds s, long start, long end) {
     size_t len = sdslen(s);
     if (len == 0) return s;
     if (start < 0) {
-        start = len+start;
+        start = len + start;
         if (start < 0) start = 0;
     }
     if (end < 0) {
-        end = len+end;
+        end = len + end;
         if (end < 0) end = 0;
     }
     size_t newlen = (start > end) ? 0 : (end-start)+1;
@@ -247,17 +247,16 @@ int sdscmp(sds s1, sds s2) {
  */
 sds *sdssplitlen(char *s, int len, char *sep, int seplen, int *count) {
     int elements = 0, slots = 5, start = 0, j;
-
     sds *tokens = malloc(sizeof(sds)*slots);
 #ifdef SDS_ABORT_ON_OOM
     if (tokens == NULL) sdsOomAbort();
 #endif
     if (seplen < 1 || len < 0 || tokens == NULL) return NULL;
-    for (j = 0; j < (len-(seplen-1)); j++) {
+    for (j = 0; j < len-(seplen-1); j++) {
         /* make sure there is room for the next element and the final one */
         if (slots < elements+2) {
             slots *= 2;
-            sds *newtokens = realloc(tokens,sizeof(sds)*slots);
+            sds *newtokens = realloc(tokens, sizeof(sds)*slots);
             if (newtokens == NULL) {
 #ifdef SDS_ABORT_ON_OOM
                 sdsOomAbort();
@@ -269,7 +268,7 @@ sds *sdssplitlen(char *s, int len, char *sep, int seplen, int *count) {
         }
         /* search the separator */
         if ((seplen == 1 && *(s+j) == sep[0]) || (memcmp(s+j,sep,seplen) == 0)) {
-            tokens[elements] = sdsnewlen(s+start,j-start);
+            tokens[elements] = sdsnewlen(s+start, j-start);
             if (tokens[elements] == NULL) {
 #ifdef SDS_ABORT_ON_OOM
                 sdsOomAbort();
@@ -278,12 +277,12 @@ sds *sdssplitlen(char *s, int len, char *sep, int seplen, int *count) {
 #endif
             }
             elements++;
-            start = j+seplen;
-            j = j+seplen-1; /* skip the separator */
+            start = j + seplen;
+            j = j + seplen - 1; /* skip the separator */
         }
     }
     /* Add the final element. We are sure there is room in the tokens array. */
-    tokens[elements] = sdsnewlen(s+start,len-start);
+    tokens[elements] = sdsnewlen(s+start, len-start);
     if (tokens[elements] == NULL) {
 #ifdef SDS_ABORT_ON_OOM
                 sdsOomAbort();

@@ -16,9 +16,7 @@
 #include <stdlib.h>
 
 aeEventLoop *aeCreateEventLoop(void) {
-    aeEventLoop *eventLoop;
-
-    eventLoop = malloc(sizeof(*eventLoop));
+    aeEventLoop *eventLoop = malloc(sizeof(*eventLoop));
     if (!eventLoop) return NULL;
     eventLoop->fileEventHead = NULL;
     eventLoop->timeEventHead = NULL;
@@ -39,9 +37,7 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
         aeFileProc *proc, void *clientData,
         aeEventFinalizerProc *finalizerProc)
 {
-    aeFileEvent *fe;
-
-    fe = malloc(sizeof(*fe));
+    aeFileEvent *fe = malloc(sizeof(*fe));
     if (fe == NULL) return AE_ERR;
     fe->fd = fd;
     fe->mask = mask;
@@ -55,17 +51,12 @@ int aeCreateFileEvent(aeEventLoop *eventLoop, int fd, int mask,
 
 void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)
 {
-    aeFileEvent *fe, *prev = NULL;
-
-    fe = eventLoop->fileEventHead;
-    while(fe) {
+    aeFileEvent *fe = eventLoop->fileEventHead, *prev = NULL;
+    while (fe) {
         if (fe->fd == fd && fe->mask == mask) {
-            if (prev == NULL)
-                eventLoop->fileEventHead = fe->next;
-            else
-                prev->next = fe->next;
-            if (fe->finalizerProc)
-                fe->finalizerProc(eventLoop, fe->clientData);
+            if (prev == NULL) eventLoop->fileEventHead = fe->next;
+            else prev->next = fe->next;
+            if (fe->finalizerProc) fe->finalizerProc(eventLoop, fe->clientData);
             free(fe);
             return;
         }
@@ -77,20 +68,18 @@ void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask)
 static void aeGetTime(long *seconds, long *milliseconds)
 {
     struct timeval tv;
-
     gettimeofday(&tv, NULL);
     *seconds = tv.tv_sec;
     *milliseconds = tv.tv_usec/1000;
 }
 
 static void aeAddMillisecondsToNow(long long milliseconds, long *sec, long *ms) {
-    long cur_sec, cur_ms, when_sec, when_ms;
-
+    long cur_sec, cur_ms;
     aeGetTime(&cur_sec, &cur_ms);
-    when_sec = cur_sec + milliseconds/1000;
-    when_ms = cur_ms + milliseconds%1000;
+    long when_sec = cur_sec + milliseconds/1000;
+    long when_ms = cur_ms + milliseconds%1000;
     if (when_ms >= 1000) {
-        when_sec ++;
+        when_sec++;
         when_ms -= 1000;
     }
     *sec = when_sec;
@@ -102,12 +91,10 @@ long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
         aeEventFinalizerProc *finalizerProc)
 {
     long long id = eventLoop->timeEventNextId++;
-    aeTimeEvent *te;
-
-    te = malloc(sizeof(*te));
+    aeTimeEvent *te = malloc(sizeof(*te));
     if (te == NULL) return AE_ERR;
     te->id = id;
-    aeAddMillisecondsToNow(milliseconds,&te->when_sec,&te->when_ms);
+    aeAddMillisecondsToNow(milliseconds, &te->when_sec, &te->when_ms);
     te->timeProc = proc;
     te->finalizerProc = finalizerProc;
     te->clientData = clientData;
@@ -118,17 +105,12 @@ long long aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds,
 
 int aeDeleteTimeEvent(aeEventLoop *eventLoop, long long id)
 {
-    aeTimeEvent *te, *prev = NULL;
-
-    te = eventLoop->timeEventHead;
-    while(te) {
+    aeTimeEvent *te = eventLoop->timeEventHead, *prev = NULL;
+    while (te) {
         if (te->id == id) {
-            if (prev == NULL)
-                eventLoop->timeEventHead = te->next;
-            else
-                prev->next = te->next;
-            if (te->finalizerProc)
-                te->finalizerProc(eventLoop, te->clientData);
+            if (prev == NULL) eventLoop->timeEventHead = te->next;
+            else prev->next = te->next;
+            if (te->finalizerProc) te->finalizerProc(eventLoop, te->clientData);
             free(te);
             return AE_OK;
         }
@@ -148,8 +130,7 @@ static aeTimeEvent *aeSearchNearestTimer(aeEventLoop *eventLoop)
 {
     aeTimeEvent *te = eventLoop->timeEventHead;
     aeTimeEvent *nearest = NULL;
-
-    while(te) {
+    while (te) {
         if (!nearest || te->when_sec < nearest->when_sec ||
                 (te->when_sec == nearest->when_sec &&
                  te->when_ms < nearest->when_ms))
@@ -162,7 +143,7 @@ static aeTimeEvent *aeSearchNearestTimer(aeEventLoop *eventLoop)
 /* Process every pending time event, then every pending file event
  * (that may be registered by time event callbacks just processed).
  * Without special flags the function sleeps until some file event
- * fires, or when the next time event occurrs (if any).
+ * fires, or when the next time event occurs (if any).
  *
  * If flags is 0, the function does nothing and returns.
  * if flags has AE_ALL_EVENTS set, all the kind of events are processed.
@@ -177,8 +158,6 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
     int maxfd = 0, numfd = 0, processed = 0;
     fd_set rfds, wfds, efds;
     aeFileEvent *fe = eventLoop->fileEventHead;
-    aeTimeEvent *te;
-    long long maxId;
     AE_NOTUSED(flags);
 
     /* Nothing to do? return ASAP */
@@ -204,7 +183,6 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
      * events, in order to sleep until the next time event is ready
      * to fire. */
     if (numfd || ((flags & AE_TIME_EVENTS) && !(flags & AE_DONT_WAIT))) {
-        int retval;
         aeTimeEvent *shortest = NULL;
         struct timeval tv, *tvp;
 
@@ -212,22 +190,19 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             shortest = aeSearchNearestTimer(eventLoop);
         if (shortest) {
             long now_sec, now_ms;
-
-            /* Calculate the time missing for the nearest
-             * timer to fire. */
+            /* Calculate the time missing for the nearest timer to fire. */
             aeGetTime(&now_sec, &now_ms);
             tvp = &tv;
             tvp->tv_sec = shortest->when_sec - now_sec;
             if (shortest->when_ms < now_ms) {
                 tvp->tv_usec = ((shortest->when_ms+1000) - now_ms)*1000;
-                tvp->tv_sec --;
+                tvp->tv_sec--;
             } else {
                 tvp->tv_usec = (shortest->when_ms - now_ms)*1000;
             }
         } else {
-            /* If we have to check for events but need to return
-             * ASAP because of AE_DONT_WAIT we need to se the timeout
-             * to zero */
+            /* If we have to check for events but need to return ASAP
+             * because of AE_DONT_WAIT we need to set the timeout to zero */
             if (flags & AE_DONT_WAIT) {
                 tv.tv_sec = tv.tv_usec = 0;
                 tvp = &tv;
@@ -237,10 +212,10 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
             }
         }
 
-        retval = select(maxfd+1, &rfds, &wfds, &efds, tvp);
+        int retval = select(maxfd+1, &rfds, &wfds, &efds, tvp);
         if (retval > 0) {
             fe = eventLoop->fileEventHead;
-            while(fe != NULL) {
+            while (fe != NULL) {
                 int fd = (int) fe->fd;
 
                 if ((fe->mask & AE_READABLE && FD_ISSET(fd, &rfds)) ||
@@ -273,31 +248,27 @@ int aeProcessEvents(aeEventLoop *eventLoop, int flags)
     }
     /* Check time events */
     if (flags & AE_TIME_EVENTS) {
-        te = eventLoop->timeEventHead;
-        maxId = eventLoop->timeEventNextId-1;
-        while(te) {
-            long now_sec, now_ms;
-            long long id;
-
+    	aeTimeEvent *te = eventLoop->timeEventHead;
+    	long long maxId = eventLoop->timeEventNextId - 1;
+        while (te) {
             if (te->id > maxId) {
                 te = te->next;
                 continue;
             }
+            long now_sec, now_ms;
             aeGetTime(&now_sec, &now_ms);
             if (now_sec > te->when_sec ||
                 (now_sec == te->when_sec && now_ms >= te->when_ms))
             {
-                int retval;
-
-                id = te->id;
-                retval = te->timeProc(eventLoop, id, te->clientData);
+                long long id = te->id;
+                int retval = te->timeProc(eventLoop, id, te->clientData);
                 /* After an event is processed our time event list may
                  * no longer be the same, so we restart from head.
                  * Still we make sure to don't process events registered
                  * by event handlers itself in order to don't loop forever.
                  * To do so we saved the max ID we want to handle. */
                 if (retval != AE_NOMORE) {
-                    aeAddMillisecondsToNow(retval,&te->when_sec,&te->when_ms);
+                    aeAddMillisecondsToNow(retval, &te->when_sec, &te->when_ms);
                 } else {
                     aeDeleteTimeEvent(eventLoop, id);
                 }
@@ -314,5 +285,5 @@ void aeMain(aeEventLoop *eventLoop)
 {
     eventLoop->stop = 0;
     while (!eventLoop->stop)
-        aeProcessEvents(eventLoop, AE_ALL_EVENTS);
+    	aeProcessEvents(eventLoop, AE_ALL_EVENTS);
 }
