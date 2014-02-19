@@ -18,9 +18,8 @@
 
 static void anetSetError(char *err, const char *fmt, ...)
 {
+	if (!err) return;
     va_list ap;
-
-    if (!err) return;
     va_start(ap, fmt);
     vsnprintf(err, ANET_ERR_LEN, fmt, ap);
     va_end(ap);
@@ -29,7 +28,6 @@ static void anetSetError(char *err, const char *fmt, ...)
 int anetNonBlock(char *err, int fd)
 {
     int flags;
-
     /* Set the socket nonblocking.
      * Note that fcntl(2) for F_GETFL and F_SETFL can't be
      * interrupted by a signal. */
@@ -78,37 +76,31 @@ int anetTcpKeepAlive(char *err, int fd)
 int anetResolve(char *err, char *host, char *ipbuf)
 {
     struct sockaddr_in sa;
-
     sa.sin_family = AF_INET;
     if (inet_aton(host, &sa.sin_addr) == 0) {
-        struct hostent *he;
-
-        he = gethostbyname(host);
+        struct hostent *he = gethostbyname(host);
         if (he == NULL) {
             anetSetError(err, "can't resolve: %s\n", host);
             return ANET_ERR;
         }
         memcpy(&sa.sin_addr, he->h_addr, sizeof(struct in_addr));
     }
-    strcpy(ipbuf,inet_ntoa(sa.sin_addr));
+    strcpy(ipbuf, inet_ntoa(sa.sin_addr));
     return ANET_OK;
 }
 
 int anetTcpConnect(char *err, char *addr, int port)
 {
     int s;
-    struct sockaddr_in sa;
-
     if ((s = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
         anetSetError(err, "creating socket: %s\n", strerror(errno));
         return ANET_ERR;
     }
+    struct sockaddr_in sa;
     sa.sin_family = AF_INET;
     sa.sin_port = htons(port);
     if (inet_aton(addr, &sa.sin_addr) == 0) {
-        struct hostent *he;
-
-        he = gethostbyname(addr);
+        struct hostent *he = gethostbyname(addr);
         if (he == NULL) {
             anetSetError(err, "can't resolve: %s\n", addr);
             close(s);
@@ -129,8 +121,8 @@ int anetTcpConnect(char *err, char *addr, int port)
 int anetRead(int fd, void *buf, int count)
 {
     int nread, totlen = 0;
-    while(totlen != count) {
-        nread = read(fd,buf,count-totlen);
+    while (totlen != count) {
+        nread = read(fd, buf, count-totlen);
         if (nread == 0) return totlen;
         if (nread == -1) return -1;
         totlen += nread;
@@ -144,8 +136,8 @@ int anetRead(int fd, void *buf, int count)
 int anetWrite(int fd, void *buf, int count)
 {
     int nwritten, totlen = 0;
-    while(totlen != count) {
-        nwritten = write(fd,buf,count-totlen);
+    while (totlen != count) {
+        nwritten = write(fd, buf, count-totlen);
         if (nwritten == 0) return totlen;
         if (nwritten == -1) return -1;
         totlen += nwritten;
@@ -190,22 +182,20 @@ int anetAccept(char *err, int serversock, char *ip, int *port)
 {
     int fd;
     struct sockaddr_in sa;
-    unsigned int saLen;
-
-    while(1) {
-        saLen = sizeof(sa);
+    while (1) {
+    	unsigned int saLen = sizeof(sa);
         fd = accept(serversock, (struct sockaddr*)&sa, &saLen);
         if (fd == -1) {
-            if (errno == EINTR)
+            if (errno == EINTR) {
                 continue;
-            else {
+            } else {
                 anetSetError(err, "accept: %s\n", strerror(errno));
                 return ANET_ERR;
             }
         }
         break;
     }
-    if (ip) strcpy(ip,inet_ntoa(sa.sin_addr));
+    if (ip) strcpy(ip, inet_ntoa(sa.sin_addr));
     if (port) *port = ntohs(sa.sin_port);
     return fd;
 }
