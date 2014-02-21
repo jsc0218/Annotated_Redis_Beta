@@ -4,7 +4,7 @@
 # Under the GPL license version 2
 
 DEBUG?= -g
-CFLAGS?= -O2 -Wall -W -DSDS_ABORT_ON_OOM
+CFLAGS?= -O2 -Wall -W -DSDS_ABORT_ON_OOM -std=gnu99
 CCOPT= $(CFLAGS)
 
 OBJ = adlist.o ae.o anet.o dict.o redis.o sds.o picol.o

@@ -14,12 +14,11 @@
 #include <assert.h>
 #include "dict.h"
 
-/* ---------------------------- Utility funcitons --------------------------- */
+/* ---------------------------- Utility functions --------------------------- */
 
 static void _dictPanic(const char *fmt, ...)
 {
     va_list ap;
-
     va_start(ap, fmt);
     fprintf(stderr, "\nDICT LIBRARY PANIC: ");
     vfprintf(stderr, fmt, ap);
@@ -32,12 +31,12 @@ static void _dictPanic(const char *fmt, ...)
 static void *_dictAlloc(int size)
 {
     void *p = malloc(size);
-    if (p == NULL)
-        _dictPanic("Out of memory");
+    if (p == NULL) _dictPanic("Out of memory");
     return p;
 }
 
-static void _dictFree(void *ptr) {
+static void _dictFree(void *ptr)
+{
     free(ptr);
 }
 
@@ -72,9 +71,7 @@ unsigned int dictIdentityHashFunction(unsigned int key)
  * I tested a few and this was the best. */
 unsigned int dictGenHashFunction(const unsigned char *buf, int len) {
     unsigned int hash = 5381;
-
-    while (len--)
-        hash = ((hash << 5) + hash) + (*buf++); /* hash * 33 + c */
+    while (len--) hash = ((hash << 5) + hash) + (*buf++); /* hash * 33 + c */
     return hash;
 }
 
@@ -91,18 +88,15 @@ static void _dictReset(dict *ht)
 }
 
 /* Create a new hash table */
-dict *dictCreate(dictType *type,
-        void *privDataPtr)
+dict *dictCreate(dictType *type, void *privDataPtr)
 {
     dict *ht = _dictAlloc(sizeof(*ht));
-
-    _dictInit(ht,type,privDataPtr);
+    _dictInit(ht, type, privDataPtr);
     return ht;
 }
 
 /* Initialize the hash table */
-int _dictInit(dict *ht, dictType *type,
-        void *privDataPtr)
+int _dictInit(dict *ht, dictType *type, void *privDataPtr)
 {
     _dictReset(ht);
     ht->type = type;
@@ -115,28 +109,23 @@ int _dictInit(dict *ht, dictType *type,
 int dictResize(dict *ht)
 {
     int minimal = ht->used;
-
-    if (minimal < DICT_HT_INITIAL_SIZE)
-        minimal = DICT_HT_INITIAL_SIZE;
+    if (minimal < DICT_HT_INITIAL_SIZE) minimal = DICT_HT_INITIAL_SIZE;
     return dictExpand(ht, minimal);
 }
 
 /* Expand or create the hashtable */
 int dictExpand(dict *ht, unsigned int size)
 {
-    dict n; /* the new hashtable */
-    unsigned int realsize = _dictNextPower(size), i;
-
     /* the size is invalid if it is smaller than the number of
      * elements already inside the hashtable */
-    if (ht->used > size)
-        return DICT_ERR;
+    if (ht->used > size) return DICT_ERR;
 
+    dict n; /* the new hashtable */
     _dictInit(&n, ht->type, ht->privdata);
+    unsigned int realsize = _dictNextPower(size);
     n.size = realsize;
-    n.sizemask = realsize-1;
+    n.sizemask = realsize - 1;
     n.table = _dictAlloc(realsize*sizeof(dictEntry*));
-
     /* Initialize all the pointers to NULL */
     memset(n.table, 0, realsize*sizeof(dictEntry*));
 
@@ -144,19 +133,14 @@ int dictExpand(dict *ht, unsigned int size)
      * note that if the old hash table is empty ht->size is zero,
      * so dictExpand just creates an hash table. */
     n.used = ht->used;
-    for (i = 0; i < ht->size && ht->used > 0; i++) {
-        dictEntry *he, *nextHe;
-
+    for (unsigned int i = 0; i < ht->size && ht->used > 0; i++) {
         if (ht->table[i] == NULL) continue;
-        
         /* For each hash entry on this slot... */
-        he = ht->table[i];
-        while(he) {
-            unsigned int h;
-
-            nextHe = he->next;
+        dictEntry *he = ht->table[i];
+        while (he) {
+        	dictEntry *nextHe = he->next;
             /* Get the new element index */
-            h = dictHashKey(ht, he->key) & n.sizemask;
+            unsigned int h = dictHashKey(ht, he->key) & n.sizemask;
             he->next = n.table[h];
             n.table[h] = he;
             ht->used--;
@@ -175,19 +159,14 @@ int dictExpand(dict *ht, unsigned int size)
 /* Add an element to the target hash table */
 int dictAdd(dict *ht, void *key, void *val)
 {
-    int index;
-    dictEntry *entry;
-
     /* Get the index of the new element, or -1 if
      * the element already exists. */
-    if ((index = _dictKeyIndex(ht, key)) == -1)
-        return DICT_ERR;
-
+	int index;
+    if ((index = _dictKeyIndex(ht, key)) == -1) return DICT_ERR;
     /* Allocates the memory and stores key */
-    entry = _dictAlloc(sizeof(*entry));
+    dictEntry *entry = _dictAlloc(sizeof(*entry));
     entry->next = ht->table[index];
     ht->table[index] = entry;
-
     /* Set the hash entry fields. */
     dictSetHashKey(ht, entry, key);
     dictSetHashVal(ht, entry, val);
@@ -198,14 +177,11 @@ int dictAdd(dict *ht, void *key, void *val)
 /* Add an element, discarding the old if the key already exists */
 int dictReplace(dict *ht, void *key, void *val)
 {
-    dictEntry *entry;
-
     /* Try to add the element. If the key
-     * does not exists dictAdd will suceed. */
-    if (dictAdd(ht, key, val) == DICT_OK)
-        return DICT_OK;
+     * does not exists dictAdd will succeed. */
+    if (dictAdd(ht, key, val) == DICT_OK) return DICT_OK;
     /* It already exists, get the entry */
-    entry = dictFind(ht, key);
+    dictEntry *entry = dictFind(ht, key);
     /* Free the old value and set the new one */
     dictFreeEntryVal(ht, entry);
     dictSetHashVal(ht, entry, val);
@@ -215,22 +191,15 @@ int dictReplace(dict *ht, void *key, void *val)
 /* Search and remove an element */
 static int dictGenericDelete(dict *ht, const void *key, int nofree)
 {
-    unsigned int h;
-    dictEntry *he, *prevHe;
-
-    if (ht->size == 0)
-        return DICT_ERR;
-    h = dictHashKey(ht, key) & ht->sizemask;
-    he = ht->table[h];
-
-    prevHe = NULL;
-    while(he) {
+    if (ht->size == 0) return DICT_ERR;
+    unsigned int h = dictHashKey(ht, key) & ht->sizemask;
+    dictEntry *he = ht->table[h];
+    dictEntry *prevHe = NULL;
+    while (he) {
         if (dictCompareHashKeys(ht, key, he->key)) {
             /* Unlink the element from the list */
-            if (prevHe)
-                prevHe->next = he->next;
-            else
-                ht->table[h] = he->next;
+            if (prevHe) prevHe->next = he->next;
+            else ht->table[h] = he->next;
             if (!nofree) {
                 dictFreeEntryKey(ht, he);
                 dictFreeEntryVal(ht, he);
@@ -245,26 +214,25 @@ static int dictGenericDelete(dict *ht, const void *key, int nofree)
     return DICT_ERR; /* not found */
 }
 
-int dictDelete(dict *ht, const void *key) {
-    return dictGenericDelete(ht,key,0);
+int dictDelete(dict *ht, const void *key)
+{
+    return dictGenericDelete(ht, key, 0);
 }
 
-int dictDeleteNoFree(dict *ht, const void *key) {
-    return dictGenericDelete(ht,key,1);
+int dictDeleteNoFree(dict *ht, const void *key)
+{
+    return dictGenericDelete(ht, key, 1);
 }
 
 /* Destroy an entire hash table */
 int _dictClear(dict *ht)
 {
-    unsigned int i;
-
     /* Free all the elements */
-    for (i = 0; i < ht->size && ht->used > 0; i++) {
-        dictEntry *he, *nextHe;
-
-        if ((he = ht->table[i]) == NULL) continue;
-        while(he) {
-            nextHe = he->next;
+    for (unsigned int i = 0; i < ht->size && ht->used > 0; i++) {
+        if (ht->table[i] == NULL) continue;
+        dictEntry *he = ht->table[i];
+        while (he) {
+        	dictEntry *nextHe = he->next;
             dictFreeEntryKey(ht, he);
             dictFreeEntryVal(ht, he);
             _dictFree(he);
@@ -288,15 +256,11 @@ void dictRelease(dict *ht)
 
 dictEntry *dictFind(dict *ht, const void *key)
 {
-    dictEntry *he;
-    unsigned int h;
-
     if (ht->size == 0) return NULL;
-    h = dictHashKey(ht, key) & ht->sizemask;
-    he = ht->table[h];
-    while(he) {
-        if (dictCompareHashKeys(ht, key, he->key))
-            return he;
+    unsigned int h = dictHashKey(ht, key) & ht->sizemask;
+    dictEntry *he = ht->table[h];
+    while (he) {
+        if (dictCompareHashKeys(ht, key, he->key)) return he;
         he = he->next;
     }
     return NULL;
@@ -305,7 +269,6 @@ dictEntry *dictFind(dict *ht, const void *key)
 dictIterator *dictGetIterator(dict *ht)
 {
     dictIterator *iter = _dictAlloc(sizeof(*iter));
-
     iter->ht = ht;
     iter->index = -1;
     iter->entry = NULL;
@@ -318,8 +281,7 @@ dictEntry *dictNext(dictIterator *iter)
     while (1) {
         if (iter->entry == NULL) {
             iter->index++;
-            if (iter->index >=
-                    (signed)iter->ht->size) break;
+            if (iter->index >= (signed)iter->ht->size) break;
             iter->entry = iter->ht->table[iter->index];
         } else {
             iter->entry = iter->nextEntry;
@@ -343,28 +305,26 @@ void dictReleaseIterator(dictIterator *iter)
  * implement randomized algorithms */
 dictEntry *dictGetRandomKey(dict *ht)
 {
+    if (ht->size == 0) return NULL;
     dictEntry *he;
     unsigned int h;
-    int listlen, listele;
-
-    if (ht->size == 0) return NULL;
     do {
         h = random() & ht->sizemask;
         he = ht->table[h];
-    } while(he == NULL);
+    } while (he == NULL);
 
     /* Now we found a non empty bucket, but it is a linked
      * list and we need to get a random element from the list.
      * The only sane way to do so is to count the element and
      * select a random index. */
-    listlen = 0;
-    while(he) {
+    int listlen = 0;
+    while (he) {
         he = he->next;
         listlen++;
     }
-    listele = random() % listlen;
+    int listele = random() % listlen;
     he = ht->table[h];
-    while(listele--) he = he->next;
+    while (listele--) he = he->next;
     return he;
 }
 
@@ -374,24 +334,19 @@ dictEntry *dictGetRandomKey(dict *ht)
 static int _dictExpandIfNeeded(dict *ht)
 {
     /* If the hash table is empty expand it to the intial size,
-     * if the table is "full" dobule its size. */
-    if (ht->size == 0)
-        return dictExpand(ht, DICT_HT_INITIAL_SIZE);
-    if (ht->used == ht->size)
-        return dictExpand(ht, ht->size*2);
+     * if the table is "full" double its size. */
+    if (ht->size == 0) return dictExpand(ht, DICT_HT_INITIAL_SIZE);
+    if (ht->used == ht->size) return dictExpand(ht, ht->size*2);
     return DICT_OK;
 }
 
 /* Our hash table capability is a power of two */
 static unsigned int _dictNextPower(unsigned int size)
 {
+    if (size >= 2147483648U) return 2147483648U;
     unsigned int i = DICT_HT_INITIAL_SIZE;
-
-    if (size >= 2147483648U)
-        return 2147483648U;
-    while(1) {
-        if (i >= size)
-            return i;
+    while (1) {
+        if (i >= size) return i;
         i *= 2;
     }
 }
@@ -401,19 +356,14 @@ static unsigned int _dictNextPower(unsigned int size)
  * If the key already exists, -1 is returned. */
 static int _dictKeyIndex(dict *ht, const void *key)
 {
-    unsigned int h;
-    dictEntry *he;
-
     /* Expand the hashtable if needed */
-    if (_dictExpandIfNeeded(ht) == DICT_ERR)
-        return -1;
+    if (_dictExpandIfNeeded(ht) == DICT_ERR) return -1;
     /* Compute the key hash value */
-    h = dictHashKey(ht, key) & ht->sizemask;
+    unsigned int h = dictHashKey(ht, key) & ht->sizemask;
     /* Search if this slot does not already contain the given key */
-    he = ht->table[h];
-    while(he) {
-        if (dictCompareHashKeys(ht, key, he->key))
-            return -1;
+    dictEntry *he = ht->table[h];
+    while (he) {
+        if (dictCompareHashKeys(ht, key, he->key)) return -1;
         he = he->next;
     }
     return h;
@@ -421,28 +371,25 @@ static int _dictKeyIndex(dict *ht, const void *key)
 
 #define DICT_STATS_VECTLEN 50
 void dictPrintStats(dict *ht) {
-    unsigned int i, slots = 0, chainlen, maxchainlen = 0;
-    unsigned int totchainlen = 0;
-    unsigned int clvector[DICT_STATS_VECTLEN];
-
     if (ht->used == 0) {
         printf("No stats available for empty dictionaries\n");
         return;
     }
 
-    for (i = 0; i < DICT_STATS_VECTLEN; i++) clvector[i] = 0;
-    for (i = 0; i < ht->size; i++) {
-        dictEntry *he;
+    unsigned int clvector[DICT_STATS_VECTLEN];
+    for (unsigned int i = 0; i < DICT_STATS_VECTLEN; i++) clvector[i] = 0;
 
+    unsigned int slots = 0, maxchainlen = 0, totchainlen = 0;
+    for (unsigned int i = 0; i < ht->size; i++) {
         if (ht->table[i] == NULL) {
             clvector[0]++;
             continue;
         }
         slots++;
         /* For each hash entry on this slot... */
-        chainlen = 0;
-        he = ht->table[i];
-        while(he) {
+        unsigned int chainlen = 0;
+        dictEntry *he = ht->table[i];
+        while (he) {
             chainlen++;
             he = he->next;
         }
@@ -458,7 +405,7 @@ void dictPrintStats(dict *ht) {
     printf(" avg chain length (counted): %.02f\n", (float)totchainlen/slots);
     printf(" avg chain length (computed): %.02f\n", (float)ht->used/slots);
     printf(" Chain length distribution:\n");
-    for (i = 0; i < DICT_STATS_VECTLEN-1; i++) {
+    for (unsigned int i = 0; i < DICT_STATS_VECTLEN-1; i++) {
         if (clvector[i] == 0) continue;
         printf("   %s%d: %d (%.02f%%)\n",(i == DICT_STATS_VECTLEN-1)?">= ":"", i, clvector[i], ((float)clvector[i]/ht->size)*100);
     }
