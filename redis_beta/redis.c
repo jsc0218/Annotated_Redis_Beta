@@ -64,7 +64,7 @@
 
 /*================================= Data types ============================== */
 
-/* With multiplexing we need to take per-clinet state.
+/* With multiplexing we need to take per-client state.
  * Clients are taken in a liked list. */
 typedef struct redisClient {
     int fd;
@@ -85,6 +85,7 @@ typedef struct redisObject {
     int refcount;
 } robj;
 
+/* Save after XX time and  XX change */
 struct saveparam {
     time_t seconds;
     int changes;
@@ -207,8 +208,7 @@ static struct redisCommand cmdTable[] = {
 /*============================ Utility functions ============================ */
 
 /* Glob-style pattern matching. */
-int stringmatchlen(const char *pattern, int patternLen,
-        const char *string, int stringLen, int nocase)
+int stringmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase)
 {
     while(patternLen) {
         switch(pattern[0]) {
@@ -331,43 +331,38 @@ int stringmatchlen(const char *pattern, int patternLen,
 
 void redisLog(int level, const char *fmt, ...)
 {
-    va_list ap;
-    FILE *fp;
-
-    fp = (server.logfile == NULL) ? stdout : fopen(server.logfile,"a");
+    FILE *fp = (server.logfile == NULL) ? stdout : fopen(server.logfile, "a");
     if (!fp) return;
-
+    va_list ap;
     va_start(ap, fmt);
     if (level >= server.verbosity) {
         char *c = ".-*";
-        fprintf(fp,"%c ",c[level]);
+        fprintf(fp, "%c " ,c[level]);
         vfprintf(fp, fmt, ap);
-        fprintf(fp,"\n");
+        fprintf(fp, "\n");
         fflush(fp);
     }
     va_end(ap);
-
     if (server.logfile) fclose(fp);
 }
 
 /*====================== Hash table type implementation  ==================== */
 
-/* This is an hash table type that uses the SDS dynamic strings libary as
- * keys and radis objects as values (objects can hold SDS strings,
+/* This is an hash table type that uses the SDS dynamic strings library as
+ * keys and redis objects as values (objects can hold SDS strings,
  * lists, sets). */
 
-static unsigned int sdsDictHashFunction(const void *key) {
+static unsigned int sdsDictHashFunction(const void *key)
+{
     return dictGenHashFunction(key, sdslen((sds)key));
 }
 
-static int sdsDictKeyCompare(void *privdata, const void *key1,
-        const void *key2)
+static int sdsDictKeyCompare(void *privdata, const void *key1, const void *key2)
 {
-    int l1,l2;
     DICT_NOTUSED(privdata);
 
-    l1 = sdslen((sds)key1);
-    l2 = sdslen((sds)key2);
+    int l1 = sdslen((sds)key1);
+    int l2 = sdslen((sds)key2);
     if (l1 != l2) return 0;
     return memcmp(key1, key2, l1) == 0;
 }
@@ -402,7 +397,8 @@ dictType sdsDictType = {
  * to report this condition to the client since the networking layer itself
  * is based on heap allocation for send buffers, so we simply abort.
  * At least the code will be simpler to read... */
-static void oom(const char *msg) {
+static void oom(const char *msg)
+{
     fprintf(stderr, "%s: Out of memory\n",msg);
     fflush(stderr);
     sleep(1);
@@ -410,18 +406,16 @@ static void oom(const char *msg) {
 }
 
 /* ====================== Redis server networking stuff ===================== */
-void closeTimedoutClients(void) {
-    redisClient *c;
-    listIter *li;
-    listNode *ln;
+void closeTimedoutClients(void)
+{
     time_t now = time(NULL);
-
-    li = listGetIterator(server.clients,AL_START_HEAD);
+    listIter *li = listGetIterator(server.clients, AL_START_HEAD);
     if (!li) return;
+    listNode *ln;
     while ((ln = listNextElement(li)) != NULL) {
-        c = listNodeValue(ln);
+    	redisClient *c = listNodeValue(ln);
         if (now - c->lastinteraction > server.maxidletime) {
-            redisLog(REDIS_DEBUG,"Closing idle client");
+            redisLog(REDIS_DEBUG, "Closing idle client");
             freeClient(c);
         }
     }
@@ -429,34 +423,32 @@ void closeTimedoutClients(void) {
 }
 
 int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
-    int j, size, used, loops = server.cronloops++;
     REDIS_NOTUSED(eventLoop);
     REDIS_NOTUSED(id);
     REDIS_NOTUSED(clientData);
 
+    int loops = server.cronloops++;
     /* If the percentage of used slots in the HT reaches REDIS_HT_MINFILL
      * we resize the hash table to save memory */
-    for (j = 0; j < server.dbnum; j++) {
-        size = dictGetHashTableSize(server.dict[j]);
-        used = dictGetHashTableUsed(server.dict[j]);
+    for (int j = 0; j < server.dbnum; j++) {
+        int size = dictGetHashTableSize(server.dict[j]);
+        int used = dictGetHashTableUsed(server.dict[j]);
         if (!(loops % 5) && used > 0) {
-            redisLog(REDIS_DEBUG,"DB %d: %d keys in %d slots HT.",j,used,size);
+            redisLog(REDIS_DEBUG, "DB %d: %d keys in %d slots HT.", j, used, size);
             // dictPrintStats(server.dict);
         }
-        if (size && used && size > REDIS_HT_MINSLOTS &&
-            (used*100/size < REDIS_HT_MINFILL)) {
-            redisLog(REDIS_NOTICE,"The hash table %d is too sparse, resize it...",j);
+        if (size && used && size > REDIS_HT_MINSLOTS && (used*100/size < REDIS_HT_MINFILL)) {
+            redisLog(REDIS_NOTICE, "The hash table %d is too sparse, resize it...", j);
             dictResize(server.dict[j]);
-            redisLog(REDIS_NOTICE,"Hash table %d resized.",j);
+            redisLog(REDIS_NOTICE, "Hash table %d resized.", j);
         }
     }
 
     /* Show information about connected clients */
-    if (!(loops % 5)) redisLog(REDIS_DEBUG,"%d clients connected",listLength(server.clients));
+    if (!(loops % 5)) redisLog(REDIS_DEBUG, "%d clients connected", listLength(server.clients));
 
-    /* Close connections of timedout clients */
-    if (!(loops % 10))
-        closeTimedoutClients();
+    /* Close connections of timeout clients */
+    if (!(loops % 10)) closeTimedoutClients();
 
     /* Check if a background saving in progress terminated */
     if (server.bgsaveinprogress) {
@@ -464,13 +456,11 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         if (wait4(-1,&statloc,WNOHANG,NULL)) {
             int exitcode = WEXITSTATUS(statloc);
             if (exitcode == 0) {
-                redisLog(REDIS_NOTICE,
-                    "Background saving terminated with success");
+                redisLog(REDIS_NOTICE, "Background saving terminated with success");
                 server.dirty = 0;
                 server.lastsave = time(NULL);
             } else {
-                redisLog(REDIS_WARNING,
-                    "Background saving error");
+                redisLog(REDIS_WARNING, "Background saving error");
             }
             server.bgsaveinprogress = 0;
         }
@@ -478,13 +468,10 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         /* If there is not a background saving in progress check if
          * we have to save now */
          time_t now = time(NULL);
-         for (j = 0; j < server.saveparamslen; j++) {
-            struct saveparam *sp = server.saveparams+j;
-
-            if (server.dirty >= sp->changes &&
-                now-server.lastsave > sp->seconds) {
-                redisLog(REDIS_NOTICE,"%d changes in %d seconds. Saving...",
-                    sp->changes, sp->seconds);
+         for (int j = 0; j < server.saveparamslen; j++) {
+            struct saveparam *sp = server.saveparams + j;
+            if (server.dirty >= sp->changes && now-server.lastsave > sp->seconds) {
+                redisLog(REDIS_NOTICE,"%d changes in %d seconds. Saving...", sp->changes, sp->seconds);
                 saveDbBackground("dump.rdb");
                 break;
             }
@@ -493,32 +480,36 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     return 1000;
 }
 
-static void createSharedObjects(void) {
-    shared.crlf = createObject(REDIS_STRING,sdsnew("\r\n"));
-    shared.ok = createObject(REDIS_STRING,sdsnew("+OK\r\n"));
-    shared.err = createObject(REDIS_STRING,sdsnew("-ERR\r\n"));
-    shared.zerobulk = createObject(REDIS_STRING,sdsnew("0\r\n\r\n"));
-    shared.nil = createObject(REDIS_STRING,sdsnew("nil\r\n"));
-    shared.zero = createObject(REDIS_STRING,sdsnew("0\r\n"));
-    shared.one = createObject(REDIS_STRING,sdsnew("1\r\n"));
-    shared.pong = createObject(REDIS_STRING,sdsnew("+PONG\r\n"));
+static void createSharedObjects(void)
+{
+    shared.crlf = createObject(REDIS_STRING, sdsnew("\r\n"));
+    shared.ok = createObject(REDIS_STRING, sdsnew("+OK\r\n"));
+    shared.err = createObject(REDIS_STRING, sdsnew("-ERR\r\n"));
+    shared.zerobulk = createObject(REDIS_STRING, sdsnew("0\r\n\r\n"));
+    shared.nil = createObject(REDIS_STRING, sdsnew("nil\r\n"));
+    shared.zero = createObject(REDIS_STRING, sdsnew("0\r\n"));
+    shared.one = createObject(REDIS_STRING, sdsnew("1\r\n"));
+    shared.pong = createObject(REDIS_STRING, sdsnew("+PONG\r\n"));
 }
 
-static void appendServerSaveParams(time_t seconds, int changes) {
-    server.saveparams = realloc(server.saveparams,sizeof(struct saveparam)*(server.saveparamslen+1));
+static void appendServerSaveParams(time_t seconds, int changes)
+{
+    server.saveparams = realloc(server.saveparams, sizeof(struct saveparam)*(server.saveparamslen+1));
     if (server.saveparams == NULL) oom("appendServerSaveParams");
     server.saveparams[server.saveparamslen].seconds = seconds;
     server.saveparams[server.saveparamslen].changes = changes;
     server.saveparamslen++;
 }
 
-static void ResetServerSaveParams() {
+static void ResetServerSaveParams()
+{
     free(server.saveparams);
     server.saveparams = NULL;
     server.saveparamslen = 0;
 }
 
-static void initServerConfig() {
+static void initServerConfig()
+{
     server.dbnum = REDIS_DEFAULT_DBNUM;
     server.port = REDIS_SERVERPORT;
     server.verbosity = REDIS_DEBUG;
@@ -526,15 +517,13 @@ static void initServerConfig() {
     server.saveparams = NULL;
     server.logfile = NULL; /* NULL = log on standard output */
     ResetServerSaveParams();
-
-    appendServerSaveParams(60*60,1);  /* save after 1 hour and 1 change */
-    appendServerSaveParams(300,100);  /* save after 5 minutes and 100 changes */
-    appendServerSaveParams(60,10000); /* save after 1 minute and 10000 changes */
+    appendServerSaveParams(60*60, 1);  /* save after 1 hour and 1 change */
+    appendServerSaveParams(300, 100);  /* save after 5 minutes and 100 changes */
+    appendServerSaveParams(60, 10000); /* save after 1 minute and 10000 changes */
 }
 
-static void initServer() {
-    int j;
-
+static void initServer()
+{
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
 
@@ -542,18 +531,16 @@ static void initServer() {
     server.objfreelist = listCreate();
     createSharedObjects();
     server.el = aeCreateEventLoop();
-    server.dict = malloc(sizeof(dict*)*server.dbnum);
-    if (!server.dict || !server.clients || !server.el || !server.objfreelist)
-        oom("server initialization"); /* Fatal OOM */
+    server.dict = malloc(sizeof(dict*) * server.dbnum);
+    if (!server.dict || !server.clients || !server.el || !server.objfreelist) oom("server initialization"); /* Fatal OOM */
     server.fd = anetTcpServer(server.neterr, server.port, NULL);
     if (server.fd == -1) {
         redisLog(REDIS_WARNING, "Opening TCP port: %s", server.neterr);
         exit(1);
     }
-    for (j = 0; j < server.dbnum; j++) {
-        server.dict[j] = dictCreate(&sdsDictType,NULL);
-        if (!server.dict[j])
-            oom("server initialization"); /* Fatal OOM */
+    for (int j = 0; j < server.dbnum; j++) {
+        server.dict[j] = dictCreate(&sdsDictType, NULL);
+        if (!server.dict[j]) oom("server initialization"); /* Fatal OOM */
     }
     server.cronloops = 0;
     server.bgsaveinprogress = 0;
@@ -953,13 +940,13 @@ static void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 }
 
 /* ======================= Redis objects implementation ===================== */
-static robj *createObject(int type, void *ptr) {
+static robj *createObject(int type, void *ptr)
+{
     robj *o;
-
     if (listLength(server.objfreelist)) {
         listNode *head = listFirst(server.objfreelist);
         o = listNodeValue(head);
-        listDelNode(server.objfreelist,head);
+        listDelNode(server.objfreelist, head);
     } else {
         o = malloc(sizeof(*o));
     }
@@ -970,32 +957,37 @@ static robj *createObject(int type, void *ptr) {
     return o;
 }
 
-static robj *createListObject(void) {
+static robj *createListObject(void)
+{
     list *l = listCreate();
-
     if (!l) oom("createListObject");
-    listSetFreeMethod(l,decrRefCount);
-    return createObject(REDIS_LIST,l);
+    listSetFreeMethod(l, decrRefCount);
+    return createObject(REDIS_LIST, l);
 }
 
-static void freeStringObject(robj *o) {
+static void freeStringObject(robj *o)
+{
     sdsfree(o->ptr);
 }
 
-static void freeListObject(robj *o) {
+static void freeListObject(robj *o)
+{
     listRelease((list*) o->ptr);
 }
 
-static void freeSetObject(robj *o) {
+static void freeSetObject(robj *o)
+{
     /* TODO */
     o = o;
 }
 
-static void incrRefCount(robj *o) {
+static void incrRefCount(robj *o)
+{
     o->refcount++;
 }
 
-static void decrRefCount(void *obj) {
+static void decrRefCount(void *obj)
+{
     robj *o = obj;
     if (--(o->refcount) == 0) {
         switch(o->type) {
@@ -1004,8 +996,7 @@ static void decrRefCount(void *obj) {
         case REDIS_SET: freeSetObject(o); break;
         default: assert(0 != 0); break;
         }
-        if (!listAddNodeHead(server.objfreelist,o))
-            free(o);
+        if (!listAddNodeHead(server.objfreelist, o)) free(o);
     }
 }
 
