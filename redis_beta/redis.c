@@ -660,19 +660,18 @@ static void freeClient(redisClient *c)
     free(c);
 }
 
-static void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask) {
-    redisClient *c = privdata;
-    int nwritten = 0, totwritten = 0, objlen;
-    robj *o;
+static void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask)
+{
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
 
-    while(listLength(c->reply)) {
-        o = listNodeValue(listFirst(c->reply));
-        objlen = sdslen(o->ptr);
-
+    int nwritten = 0, totwritten = 0;
+    redisClient *c = privdata;
+    while (listLength(c->reply)) {
+    	robj *o = listNodeValue(listFirst(c->reply));
+        int objlen = sdslen(o->ptr);
         if (objlen == 0) {
-            listDelNode(c->reply,listFirst(c->reply));
+            listDelNode(c->reply, listFirst(c->reply));
             continue;
         }
 
@@ -682,7 +681,7 @@ static void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask)
         totwritten += nwritten;
         /* If we fully sent the object on head go to the next one */
         if (c->sentlen == objlen) {
-            listDelNode(c->reply,listFirst(c->reply));
+            listDelNode(c->reply, listFirst(c->reply));
             c->sentlen = 0;
         }
     }
@@ -690,8 +689,7 @@ static void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask)
         if (errno == EAGAIN) {
             nwritten = 0;
         } else {
-            redisLog(REDIS_DEBUG,
-                "Error writing to client: %s", strerror(errno));
+            redisLog(REDIS_DEBUG, "Error writing to client: %s", strerror(errno));
             freeClient(c);
             return;
         }
@@ -699,72 +697,72 @@ static void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask)
     if (totwritten > 0) c->lastinteraction = time(NULL);
     if (listLength(c->reply) == 0) {
         c->sentlen = 0;
-        aeDeleteFileEvent(server.el,c->fd,AE_WRITABLE);
+        aeDeleteFileEvent(server.el, c->fd, AE_WRITABLE);
     }
 }
 
-static struct redisCommand *lookupCommand(char *name) {
+static struct redisCommand *lookupCommand(char *name)
+{
     int j = 0;
-    while(cmdTable[j].name != NULL) {
-        if (!strcmp(name,cmdTable[j].name)) return &cmdTable[j];
+    while (cmdTable[j].name != NULL) {
+        if (!strcmp(name, cmdTable[j].name)) return &cmdTable[j];
         j++;
     }
     return NULL;
 }
 
 /* resetClient prepare the client to process the next command */
-static void resetClient(redisClient *c) {
+static void resetClient(redisClient *c)
+{
     freeClientArgv(c);
     c->bulklen = -1;
 }
 
 /* If this function gets called we already read a whole
- * command, argments are in the client argv/argc fields.
+ * command, arguments are in the client argv/argc fields.
  * processCommand() execute the command or prepare the
  * server for a bulk read from the client.
  *
  * If 1 is returned the client is still alive and valid and
- * and other operations can be performed by the caller. Otherwise
- * if 0 is returned the client was destroied (i.e. after QUIT). */
-static int processCommand(redisClient *c) {
-    struct redisCommand *cmd;
-
+ * other operations can be performed by the caller. Otherwise
+ * if 0 is returned the client was destroyed (i.e. after QUIT). */
+static int processCommand(redisClient *c)
+{
     sdstolower(c->argv[0]);
     /* The QUIT command is handled as a special case. Normal command
      * procs are unable to close the client connection safely */
-    if (!strcmp(c->argv[0],"quit")) {
+    if (!strcmp(c->argv[0], "quit")) {
         freeClient(c);
         return 0;
     }
-    cmd = lookupCommand(c->argv[0]);
+    struct redisCommand *cmd = lookupCommand(c->argv[0]);
     if (!cmd) {
-        addReplySds(c,sdsnew("-ERR unknown command\r\n"));
+        addReplySds(c, sdsnew("-ERR unknown command\r\n"));
         resetClient(c);
         return 1;
     } else if (cmd->arity != c->argc) {
-        addReplySds(c,sdsnew("-ERR wrong number of arguments\r\n"));
+        addReplySds(c, sdsnew("-ERR wrong number of arguments\r\n"));
         resetClient(c);
         return 1;
     } else if (cmd->type == REDIS_CMD_BULK && c->bulklen == -1) {
         int bulklen = atoi(c->argv[c->argc-1]);
-
         sdsfree(c->argv[c->argc-1]);
         if (bulklen < 0 || bulklen > 1024*1024*1024) {
             c->argc--;
             c->argv[c->argc] = NULL;
-            addReplySds(c,sdsnew("-ERR invalid bulk write count\r\n"));
+            addReplySds(c, sdsnew("-ERR invalid bulk write count\r\n"));
             resetClient(c);
             return 1;
         }
         c->argv[c->argc-1] = NULL;
         c->argc--;
-        c->bulklen = bulklen+2; /* add two bytes for CR+LF */
+        c->bulklen = bulklen + 2; /* add two bytes for CR+LF */
         /* It is possible that the bulk read is already in the
          * buffer. Check this condition and handle it accordingly */
         if ((signed)sdslen(c->querybuf) >= c->bulklen) {
-            c->argv[c->argc] = sdsnewlen(c->querybuf,c->bulklen-2);
+            c->argv[c->argc] = sdsnewlen(c->querybuf, c->bulklen-2);
             c->argc++;
-            c->querybuf = sdsrange(c->querybuf,c->bulklen,-1);
+            c->querybuf = sdsrange(c->querybuf, c->bulklen, -1);
         } else {
             return 1;
         }
@@ -775,7 +773,8 @@ static int processCommand(redisClient *c) {
     return 1;
 }
 
-static void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
+static void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask)
+{
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
     redisClient *c = (redisClient*) privdata;
@@ -785,7 +784,7 @@ static void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mas
         if (errno == EAGAIN) {
             nread = 0;
         } else {
-            redisLog(REDIS_DEBUG, "Reading from client: %s",strerror(errno));
+            redisLog(REDIS_DEBUG, "Reading from client: %s", strerror(errno));
             freeClient(c);
             return;
         }
@@ -804,15 +803,14 @@ static void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mas
 again:
     if (c->bulklen == -1) {
         /* Read the first line of the query */
-        char *p = strchr(c->querybuf,'\n');
-        size_t querylen;
+        char *p = strchr(c->querybuf, '\n');
         if (p) {
             sds query = c->querybuf;
             c->querybuf = sdsempty();
-            querylen = 1+(p-(query));
+            size_t querylen = 1 + (p - query);
             if (sdslen(query) > querylen) {
                 /* leave data after the first line of the query in the buffer */
-                c->querybuf = sdscatlen(c->querybuf,query+querylen,sdslen(query)-querylen);
+                c->querybuf = sdscatlen(c->querybuf, query+querylen, sdslen(query)-querylen);
             }
             *p = '\0'; /* remove "\n" */
             if (*(p-1) == '\r') *(p-1) = '\0'; /* and "\r" if any */
@@ -825,7 +823,7 @@ again:
                 return;
             }
             int argc;
-            sds *argv = sdssplitlen(query,sdslen(query)," ",1,&argc);
+            sds *argv = sdssplitlen(query, sdslen(query), " ", 1, &argc);
             sdsfree(query);
             if (argv == NULL) oom("Splitting query in token");
             for (int j = 0; j < argc && j < REDIS_MAX_ARGS; j++) {
@@ -853,12 +851,11 @@ again:
            we are reading the bulk data that is actually the last
            argument of the command. */
         int qbl = sdslen(c->querybuf);
-
         if (c->bulklen <= qbl) {
             /* Copy everything but the final CRLF as final argument */
-            c->argv[c->argc] = sdsnewlen(c->querybuf,c->bulklen-2);
+            c->argv[c->argc] = sdsnewlen(c->querybuf, c->bulklen-2);
             c->argc++;
-            c->querybuf = sdsrange(c->querybuf,c->bulklen,-1);
+            c->querybuf = sdsrange(c->querybuf, c->bulklen, -1);
             processCommand(c);
             return;
         }
@@ -895,16 +892,17 @@ static int createClient(int fd)
     return REDIS_OK;
 }
 
-static void addReply(redisClient *c, robj *obj) {
+static void addReply(redisClient *c, robj *obj)
+{
     if (listLength(c->reply) == 0 &&
-        aeCreateFileEvent(server.el, c->fd, AE_WRITABLE,
-        sendReplyToClient, c, NULL) == AE_ERR) return;
-    if (!listAddNodeTail(c->reply,obj)) oom("listAddNodeTail");
+    		aeCreateFileEvent(server.el, c->fd, AE_WRITABLE, sendReplyToClient, c, NULL) == AE_ERR) return;
+    if (!listAddNodeTail(c->reply, obj)) oom("listAddNodeTail");
     incrRefCount(obj);
 }
 
-static void addReplySds(redisClient *c, sds s) {
-    robj *o = createObject(REDIS_STRING,s);
+static void addReplySds(redisClient *c, sds s)
+{
+    robj *o = createObject(REDIS_STRING, s);
     addReply(c,o);
     decrRefCount(o);
 }
@@ -994,23 +992,18 @@ static void decrRefCount(void *obj)
 /*============================ DB saving/loading ============================ */
 
 /* Save the DB on disk. Return REDIS_ERR on error, REDIS_OK on success */
-static int saveDb(char *filename) {
-    dictIterator *di = NULL;
-    dictEntry *de;
-    uint32_t len;
-    uint8_t type;
-    FILE *fp;
+static int saveDb(char *filename)
+{
     char tmpfile[256];
-    int j;
-
-    snprintf(tmpfile,256,"temp-%d.%ld.rdb",(int)time(NULL),(long int)random());
-    fp = fopen(tmpfile,"w");
+    snprintf(tmpfile, 256, "temp-%d.%ld.rdb", (int)time(NULL), (long int)random());
+    FILE *fp = fopen(tmpfile, "w");
     if (!fp) {
         redisLog(REDIS_WARNING, "Failed saving the DB: %s", strerror(errno));
         return REDIS_ERR;
     }
-    if (fwrite("REDIS0000",9,1,fp) == 0) goto werr;
-    for (j = 0; j < server.dbnum; j++) {
+    if (fwrite("REDIS0000", 9, 1, fp) == 0) goto werr;
+    dictIterator *di = NULL;
+    for (int j = 0; j < server.dbnum; j++) {
         dict *dict = server.dict[j];
         if (dictGetHashTableUsed(dict) == 0) continue;
         di = dictGetIterator(dict);
@@ -1020,16 +1013,16 @@ static int saveDb(char *filename) {
         }
 
         /* Write the SELECT DB opcode */
-        type = REDIS_SELECTDB;
-        len = htonl(j);
+        uint8_t type = REDIS_SELECTDB;
+        uint32_t len = htonl(j);
         if (fwrite(&type,1,1,fp) == 0) goto werr;
         if (fwrite(&len,4,1,fp) == 0) goto werr;
 
         /* Iterate this DB writing every entry */
-        while((de = dictNext(di)) != NULL) {
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
             sds key = dictGetEntryKey(de);
             robj *o = dictGetEntryVal(de);
-
             type = o->type;
             len = htonl(sdslen(key));
             if (fwrite(&type,1,1,fp) == 0) goto werr;
@@ -1045,15 +1038,13 @@ static int saveDb(char *filename) {
                 /* Save a list value */
                 list *list = o->ptr;
                 listNode *ln = list->head;
-
                 len = htonl(listLength(list));
                 if (fwrite(&len,4,1,fp) == 0) goto werr;
-                while(ln) {
+                while (ln) {
                     robj *eleobj = listNodeValue(ln);
                     len = htonl(sdslen(eleobj->ptr));
                     if (fwrite(&len,4,1,fp) == 0) goto werr;
-                    if (fwrite(eleobj->ptr,sdslen(eleobj->ptr),1,fp) == 0)
-                        goto werr;
+                    if (fwrite(eleobj->ptr,sdslen(eleobj->ptr),1,fp) == 0) goto werr;
                     ln = ln->next;
                 }
             } else {
@@ -1063,48 +1054,45 @@ static int saveDb(char *filename) {
         dictReleaseIterator(di);
     }
     /* EOF opcode */
-    type = REDIS_EOF;
+    uint8_t type = REDIS_EOF;
     if (fwrite(&type,1,1,fp) == 0) goto werr;
     fclose(fp);
     
     /* Use RENAME to make sure the DB file is changed atomically only
      * if the generate DB file is ok. */
     if (rename(tmpfile,filename) == -1) {
-        redisLog(REDIS_WARNING,"Error moving temp DB file on the final destionation: %s", strerror(errno));
+        redisLog(REDIS_WARNING, "Error moving temp DB file on the final destionation: %s", strerror(errno));
         unlink(tmpfile);
         return REDIS_ERR;
     }
-    redisLog(REDIS_NOTICE,"DB saved on disk");
+    redisLog(REDIS_NOTICE, "DB saved on disk");
     server.dirty = 0;
     server.lastsave = time(NULL);
     return REDIS_OK;
 
 werr:
     fclose(fp);
-    redisLog(REDIS_WARNING,"Error saving DB on disk: %s", strerror(errno));
+    redisLog(REDIS_WARNING, "Error saving DB on disk: %s", strerror(errno));
     if (di) dictReleaseIterator(di);
     return REDIS_ERR;
 }
 
-static int saveDbBackground(char *filename) {
-    pid_t childpid;
-
+static int saveDbBackground(char *filename)
+{
     if (server.bgsaveinprogress) return REDIS_ERR;
+    pid_t childpid;
     if ((childpid = fork()) == 0) {
         /* Child */
         close(server.fd);
-        if (saveDb(filename) == REDIS_OK) {
-            exit(0);
-        } else {
-            exit(1);
-        }
+        if (saveDb(filename) == REDIS_OK) exit(0);
+        else exit(1);
     } else {
         /* Parent */
-        redisLog(REDIS_NOTICE,"Background saving started by pid %d",childpid);
+        redisLog(REDIS_NOTICE, "Background saving started by pid %d", childpid);
         server.bgsaveinprogress = 1;
         return REDIS_OK;
     }
-    return REDIS_OK; /* unreached */
+    return REDIS_OK;  /* unreached */
 }
 
 static int loadDb(char *filename)
@@ -1385,13 +1373,11 @@ static void keysCommand(redisClient *c) {
 }
 
 static void dbsizeCommand(redisClient *c) {
-    addReplySds(c,
-        sdscatprintf(sdsempty(),"%lu\r\n",dictGetHashTableUsed(c->dict)));
+    addReplySds(c, sdscatprintf(sdsempty(),"%lu\r\n",dictGetHashTableUsed(c->dict)));
 }
 
 static void lastsaveCommand(redisClient *c) {
-    addReplySds(c,
-        sdscatprintf(sdsempty(),"%lu\r\n",server.lastsave));
+    addReplySds(c, sdscatprintf(sdsempty(),"%lu\r\n",server.lastsave));
 }
 
 static void saveCommand(redisClient *c) {
