@@ -30,8 +30,8 @@
 
 #include <sys/types.h>
 
-typedef char *sds;
-
+typedef char *sds;  // simple dynamic string
+// advantage: 1. strlen O(1) 2. append 3. no assumption about its terminal flag
 struct sdshdr {
     long len;
     long free;
@@ -39,22 +39,20 @@ struct sdshdr {
 };
 
 sds sdsnewlen(const void *init, size_t initlen);
-sds sdsnew(const char *init);
 sds sdsempty();
+sds sdsnew(const char *init);
 size_t sdslen(const sds s);
-sds sdsdup(const sds s);
 void sdsfree(sds s);
 size_t sdsavail(sds s);
+void sdsupdatelen(sds s);
 sds sdscatlen(sds s, void *t, size_t len);
 sds sdscat(sds s, char *t);
-sds sdscpylen(sds s, char *t, size_t len);
-sds sdscpy(sds s, char *t);
 sds sdscatprintf(sds s, const char *fmt, ...);
 sds sdstrim(sds s, const char *cset);
 sds sdsrange(sds s, long start, long end);
-void sdsupdatelen(sds s);
+void sdstolower(sds s);
 int sdscmp(sds s1, sds s2);
 sds *sdssplitlen(char *s, int len, char *sep, int seplen, int *count);
-void sdstolower(sds s);
+
 
 #endif

@@ -1336,15 +1336,15 @@ static void keysCommand(redisClient *c) {
         sds key = dictGetEntryKey(de);
         if ((pattern[0] == '*' && pattern[1] == '\0') ||
             stringmatchlen(pattern,plen,key,sdslen(key),0)) {
-            keys = sdscatlen(keys,key,sdslen(key));
-            keys = sdscatlen(keys," ",1);
+            keys = sdscat(keys, key);
+            keys = sdscatlen(keys, " ", 1);
         }
     }
     dictReleaseIterator(di);
     keys = sdstrim(keys," ");
     sds reply = sdscatprintf(sdsempty(),"%lu\r\n",sdslen(keys));
-    reply = sdscatlen(reply,keys,sdslen(keys));
-    reply = sdscatlen(reply,"\r\n",2);
+    reply = sdscat(reply, keys);
+    reply = sdscatlen(reply, "\r\n", 2);
     sdsfree(keys);
     addReplySds(c,reply);
 }

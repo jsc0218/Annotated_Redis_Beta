@@ -32,12 +32,14 @@
 #include <string.h>
 #include <ctype.h>
 
-static void sdsOomAbort(void) {
-    fprintf(stderr,"SDS: Out Of Memory (SDS_ABORT_ON_OOM defined)\n");
+static void sdsOomAbort(void)
+{
+    fprintf(stderr, "SDS: Out Of Memory (SDS_ABORT_ON_OOM defined)\n");
     abort();
 }
 
-sds sdsnewlen(const void *init, size_t initlen) {
+sds sdsnewlen(const void *init, size_t initlen)
+{
     struct sdshdr *sh = malloc(sizeof(struct sdshdr) + initlen + 1);
 #ifdef SDS_ABORT_ON_OOM
     if (sh == NULL) sdsOomAbort();
@@ -46,55 +48,58 @@ sds sdsnewlen(const void *init, size_t initlen) {
 #endif
     sh->len = initlen;
     sh->free = 0;
-    if (initlen) {
+    if (initlen > 0) {
         if (init) memcpy(sh->buf, init, initlen);
         else memset(sh->buf, 0, initlen);
     }
     sh->buf[initlen] = '\0';
-    return (char*)sh->buf;
+    return (char *)sh->buf;
 }
 
-sds sdsempty(void) {
+sds sdsempty(void)
+{
     return sdsnewlen("", 0);
 }
 
-sds sdsnew(const char *init) {
+sds sdsnew(const char *init)
+{
     size_t initlen = (init == NULL) ? 0 : strlen(init);
     return sdsnewlen(init, initlen);
 }
 
-size_t sdslen(const sds s) {
+size_t sdslen(const sds s)
+{
     struct sdshdr *sh = (void*) (s - sizeof(struct sdshdr));
     return sh->len;
 }
 
-sds sdsdup(const sds s) {
-    return sdsnewlen(s, sdslen(s));
-}
-
-void sdsfree(sds s) {
+void sdsfree(sds s)
+{
     if (s == NULL) return;
     free(s - sizeof(struct sdshdr));
 }
 
-size_t sdsavail(sds s) {
+size_t sdsavail(sds s)
+{
     struct sdshdr *sh = (void*) (s - sizeof(struct sdshdr));
     return sh->free;
 }
 
-void sdsupdatelen(sds s) {
-    struct sdshdr *sh = (void*) (s - sizeof(struct sdshdr));
+void sdsupdatelen(sds s)
+{
     int reallen = strlen(s);
+    struct sdshdr *sh = (void*) (s - sizeof(struct sdshdr));
     sh->free += (sh->len - reallen);
     sh->len = reallen;
 }
 
-static sds sdsMakeRoomFor(sds s, size_t addlen) {
+static sds sdsMakeRoomFor(sds s, size_t addlen)
+{
     size_t free = sdsavail(s);
     if (free >= addlen) return s;
     size_t len = sdslen(s);
-    struct sdshdr *sh = (void*) (s - sizeof(struct sdshdr));
     size_t newlen = (len + addlen) * 2;
+    struct sdshdr *sh = (void*) (s - sizeof(struct sdshdr));
     struct sdshdr *newsh = realloc(sh, sizeof(struct sdshdr) + newlen + 1);
 #ifdef SDS_ABORT_ON_OOM
     if (newsh == NULL) sdsOomAbort();
@@ -105,7 +110,8 @@ static sds sdsMakeRoomFor(sds s, size_t addlen) {
     return newsh->buf;
 }
 
-sds sdscatlen(sds s, void *t, size_t len) {
+sds sdscatlen(sds s, void *t, size_t len)
+{
     size_t curlen = sdslen(s);
     s = sdsMakeRoomFor(s, len);
     if (s == NULL) return NULL;
@@ -117,31 +123,13 @@ sds sdscatlen(sds s, void *t, size_t len) {
     return s;
 }
 
-sds sdscat(sds s, char *t) {
+sds sdscat(sds s, char *t)
+{
     return sdscatlen(s, t, strlen(t));
 }
 
-sds sdscpylen(sds s, char *t, size_t len) {
-    struct sdshdr *sh = (void*) (s - sizeof(struct sdshdr));
-    size_t totlen = sh->free + sh->len;
-    if (totlen < len) {
-        s = sdsMakeRoomFor(s, len-totlen);
-        if (s == NULL) return NULL;
-        sh = (void*) (s - sizeof(struct sdshdr));
-        totlen = sh->free + sh->len;
-    }
-    memcpy(s, t, len);
-    s[len] = '\0';
-    sh->len = len;
-    sh->free = totlen - len;
-    return s;
-}
-
-sds sdscpy(sds s, char *t) {
-    return sdscpylen(s, t, strlen(t));
-}
-
-sds sdscatprintf(sds s, const char *fmt, ...) {
+sds sdscatprintf(sds s, const char *fmt, ...)
+{
     va_list ap;
     va_start(ap, fmt);
     char *buf;
@@ -163,7 +151,7 @@ sds sdscatprintf(sds s, const char *fmt, ...) {
         break;
     }
     va_end(ap);
-    char *t = sdscat(s, buf);
+    sds t = sdscat(s, buf);
     free(buf);
     return t;
 }
@@ -210,14 +198,10 @@ sds sdsrange(sds s, long start, long end) {
     return s;
 }
 
-void sdstolower(sds s) {
-    int len = sdslen(s), j;
-    for (j = 0; j < len; j++) s[j] = tolower(s[j]);
-}
-
-void sdstoupper(sds s) {
-    int len = sdslen(s), j;
-    for (j = 0; j < len; j++) s[j] = toupper(s[j]);
+void sdstolower(sds s)
+{
+    int len = sdslen(s);
+    for (int j = 0; j < len; j++) s[j] = tolower(s[j]);
 }
 
 int sdscmp(sds s1, sds s2) {
