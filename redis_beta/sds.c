@@ -156,13 +156,14 @@ sds sdscatprintf(sds s, const char *fmt, ...)
     return t;
 }
 
-sds sdstrim(sds s, const char *cset) {
+sds sdstrim(sds s, const char *cset)
+{
     char *start, *end, *sp, *ep;
     sp = start = s;
     ep = end = s + sdslen(s) - 1;
-    while (sp <= end && strchr(cset, *sp)) sp++;
-    while (ep > start && strchr(cset, *ep)) ep--;
-    size_t len = (sp > ep) ? 0 : ((ep-sp)+1);
+    while (sp<=end && strchr(cset, *sp)) sp++;
+    while (ep>=start && strchr(cset, *ep)) ep--;
+    size_t len = (sp > ep) ? 0 : (ep-sp+1);
     struct sdshdr *sh = (void*) (s - sizeof(struct sdshdr));
     if (sh->buf != sp) memmove(sh->buf, sp, len);
     sh->buf[len] = '\0';
@@ -170,29 +171,29 @@ sds sdstrim(sds s, const char *cset) {
     sh->len = len;
     return s;
 }
-
+// ????????
 sds sdsrange(sds s, long start, long end) {
     size_t len = sdslen(s);
     if (len == 0) return s;
     if (start < 0) {
-        start = len + start;
+        start += len;
         if (start < 0) start = 0;
     }
     if (end < 0) {
-        end = len + end;
+        end += len;
         if (end < 0) end = 0;
     }
-    size_t newlen = (start > end) ? 0 : (end-start)+1;
+    size_t newlen = (start > end) ? 0 : end-start+1;
     if (newlen != 0) {
         if (start >= (signed)len) start = len - 1;
         if (end >= (signed)len) end = len - 1;
-        newlen = (start > end) ? 0 : (end-start)+1;
+        newlen = (start > end) ? 0 : end-start+1;
     } else {
         start = 0;
     }
     struct sdshdr *sh = (void*) (s - sizeof(struct sdshdr));
     if (start != 0) memmove(sh->buf, sh->buf+start, newlen);
-    sh->buf[newlen] = 0;
+    sh->buf[newlen] = '\0';
     sh->free = sh->free + (sh->len - newlen);
     sh->len = newlen;
     return s;
@@ -204,7 +205,8 @@ void sdstolower(sds s)
     for (int j = 0; j < len; j++) s[j] = tolower(s[j]);
 }
 
-int sdscmp(sds s1, sds s2) {
+int sdscmp(sds s1, sds s2)
+{
     size_t l1 = sdslen(s1);
     size_t l2 = sdslen(s2);
     size_t minlen = (l1 < l2) ? l1 : l2;
@@ -229,14 +231,15 @@ int sdscmp(sds s1, sds s2) {
  * requires length arguments. sdssplit() is just the
  * same function but for zero-terminated strings.
  */
-sds *sdssplitlen(char *s, int len, char *sep, int seplen, int *count) {
-    int elements = 0, slots = 5, start = 0, j;
-    sds *tokens = malloc(sizeof(sds)*slots);
+sds *sdssplitlen(char *s, int len, char *sep, int seplen, int *count)
+{
+    int elements = 0, slots = 5, start = 0;
+    sds *tokens = malloc(sizeof(sds) * slots);
 #ifdef SDS_ABORT_ON_OOM
     if (tokens == NULL) sdsOomAbort();
 #endif
     if (seplen < 1 || len < 0 || tokens == NULL) return NULL;
-    for (j = 0; j < len-(seplen-1); j++) {
+    for (int j = 0; j < len-(seplen-1); j++) {
         /* make sure there is room for the next element and the final one */
         if (slots < elements+2) {
             slots *= 2;
@@ -251,7 +254,7 @@ sds *sdssplitlen(char *s, int len, char *sep, int seplen, int *count) {
             tokens = newtokens;
         }
         /* search the separator */
-        if ((seplen == 1 && *(s+j) == sep[0]) || (memcmp(s+j,sep,seplen) == 0)) {
+        if ((seplen == 1 && *(s+j) == sep[0]) || (memcmp(s+j, sep, seplen) == 0)) {
             tokens[elements] = sdsnewlen(s+start, j-start);
             if (tokens[elements] == NULL) {
 #ifdef SDS_ABORT_ON_OOM
@@ -262,7 +265,7 @@ sds *sdssplitlen(char *s, int len, char *sep, int seplen, int *count) {
             }
             elements++;
             start = j + seplen;
-            j = j + seplen - 1; /* skip the separator */
+            j = start - 1; /* skip the separator */
         }
     }
     /* Add the final element. We are sure there is room in the tokens array. */
@@ -274,15 +277,13 @@ sds *sdssplitlen(char *s, int len, char *sep, int seplen, int *count) {
                 goto cleanup;
 #endif
     }
-    elements++;
-    *count = elements;
+    *count = ++elements;
     return tokens;
 
 #ifndef SDS_ABORT_ON_OOM
 cleanup:
     {
-        int i;
-        for (i = 0; i < elements; i++) sdsfree(tokens[i]);
+        for (int i = 0; i < elements; i++) sdsfree(tokens[i]);
         free(tokens);
         return NULL;
     }
