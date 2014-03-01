@@ -76,14 +76,14 @@ typedef struct dictIterator {
 
 /* API */
 dict *dictCreate(dictType *type, void *privDataPtr);
+void dictRelease(dict *ht);
 int dictExpand(dict *ht, unsigned int size);
+int dictResize(dict *ht);
 int dictAdd(dict *ht, void *key, void *val);
 int dictReplace(dict *ht, void *key, void *val);
 int dictDelete(dict *ht, const void *key);
 int dictDeleteNoFree(dict *ht, const void *key);
-void dictRelease(dict *ht);
 dictEntry * dictFind(dict *ht, const void *key);
-int dictResize(dict *ht);
 dictIterator *dictGetIterator(dict *ht);
 dictEntry *dictNext(dictIterator *iter);
 void dictReleaseIterator(dictIterator *iter);
