@@ -20,7 +20,7 @@
 #include "sds.h"    /* Dynamic safe strings */
 #include "anet.h"   /* Networking the easy way */
 #include "dict.h"   /* Hash tables */
-#include "adlist.h" /* Linked lists */
+#include "dlist.h" /* Linked lists */
 
 /* Error codes */
 #define REDIS_OK                0
@@ -360,7 +360,6 @@ static unsigned int sdsDictHashFunction(const void *key)
 static int sdsDictKeyCompare(void *privdata, const void *key1, const void *key2)
 {
     DICT_NOTUSED(privdata);
-
     int l1 = sdslen((sds)key1);
     int l2 = sdslen((sds)key2);
     if (l1 != l2) return 0;
@@ -370,14 +369,12 @@ static int sdsDictKeyCompare(void *privdata, const void *key1, const void *key2)
 static void sdsDictKeyDestructor(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
-
     sdsfree(val);
 }
 
 static void sdsDictValDestructor(void *privdata, void *val)
 {
     DICT_NOTUSED(privdata);
-
     decrRefCount(val);
 }
 

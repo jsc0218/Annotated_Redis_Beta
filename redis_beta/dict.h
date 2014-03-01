@@ -40,34 +40,27 @@ typedef struct dict {
 typedef struct dictIterator {
     dict *ht;
     int index;
-    dictEntry *entry, *nextEntry;
+    dictEntry *entry;
+    dictEntry *next;
 } dictIterator;
 
 /* This is the initial size of every hash table */
-#define DICT_HT_INITIAL_SIZE     16
+#define DICT_HT_INITIAL_SIZE 16
 
 /* ------------------------------- Macros ------------------------------------*/
 #define dictFreeEntryVal(ht, entry) \
-    if ((ht)->type->valDestructor) \
-        (ht)->type->valDestructor((ht)->privdata, (entry)->val)
+    if ((ht)->type->valDestructor) (ht)->type->valDestructor((ht)->privdata, (entry)->val)
 
-#define dictSetHashVal(ht, entry, _val_) do { \
-    if ((ht)->type->valDup) \
-        entry->val = (ht)->type->valDup((ht)->privdata, _val_); \
-    else \
-        entry->val = (_val_); \
-} while(0)
+#define dictSetHashVal(ht, entry, _val_) \
+    if ((ht)->type->valDup) entry->val = (ht)->type->valDup((ht)->privdata, _val_); \
+    else entry->val = (_val_);
 
 #define dictFreeEntryKey(ht, entry) \
-    if ((ht)->type->keyDestructor) \
-        (ht)->type->keyDestructor((ht)->privdata, (entry)->key)
+    if ((ht)->type->keyDestructor) (ht)->type->keyDestructor((ht)->privdata, (entry)->key)
 
-#define dictSetHashKey(ht, entry, _key_) do { \
-    if ((ht)->type->keyDup) \
-        entry->key = (ht)->type->keyDup((ht)->privdata, _key_); \
-    else \
-        entry->key = (_key_); \
-} while(0)
+#define dictSetHashKey(ht, entry, _key_) \
+    if ((ht)->type->keyDup) entry->key = (ht)->type->keyDup((ht)->privdata, _key_); \
+    else entry->key = (_key_);
 
 #define dictCompareHashKeys(ht, key1, key2) \
     (((ht)->type->keyCompare) ? \
@@ -97,10 +90,5 @@ void dictReleaseIterator(dictIterator *iter);
 dictEntry *dictGetRandomKey(dict *ht);
 void dictPrintStats(dict *ht);
 unsigned int dictGenHashFunction(const unsigned char *buf, int len);
-
-/* Hash table types */
-extern dictType dictTypeHeapStringCopyKey;
-extern dictType dictTypeHeapStrings;
-extern dictType dictTypeHeapStringCopyKeyValue;
 
 #endif /* __DICT_H */

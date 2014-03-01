@@ -151,9 +151,9 @@ sds sdscatprintf(sds s, const char *fmt, ...)
         break;
     }
     va_end(ap);
-    sds t = sdscat(s, buf);
+    sds res = sdscat(s, buf);
     free(buf);
-    return t;
+    return res;
 }
 
 sds sdstrim(sds s, const char *cset)
