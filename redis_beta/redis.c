@@ -18,7 +18,7 @@
 
 #include "ae.h"     /* Event driven programming library */
 #include "sds.h"    /* Dynamic safe strings */
-#include "anet.h"   /* Networking the easy way */
+#include "net.h"   /* Networking the easy way */
 #include "dict.h"   /* Hash tables */
 #include "dlist.h" /* Linked lists */
 
@@ -98,7 +98,7 @@ struct redisServer {
     dict **dict;
     long long dirty;            /* changes to DB from the last save */
     list *clients;
-    char neterr[ANET_ERR_LEN];
+    char neterr[NET_ERR_LEN];
     aeEventLoop *el;
     int verbosity;
     int cronloops;
@@ -530,7 +530,7 @@ static void initServer()
     server.el = aeCreateEventLoop();
     server.dict = malloc(sizeof(dict*) * server.dbnum);
     if (!server.dict || !server.clients || !server.el || !server.objfreelist) oom("server initialization"); /* Fatal OOM */
-    server.fd = anetTcpServer(server.neterr, server.port, NULL);
+    server.fd = netTcpServer(server.neterr, server.port, NULL);
     if (server.fd == -1) {
         redisLog(REDIS_WARNING, "Opening TCP port: %s", server.neterr);
         exit(1);
@@ -868,8 +868,8 @@ static int selectDb(redisClient *c, int id)
 
 static int createClient(int fd)
 {
-    anetNonBlock(NULL, fd);
-    anetTcpNoDelay(NULL, fd);
+    netNonBlock(NULL, fd);
+    netTcpNoDelay(NULL, fd);
     redisClient *c = malloc(sizeof(*c));
     if (!c) return REDIS_ERR;
     selectDb(c, 0);
@@ -912,7 +912,7 @@ static void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask)
 
     int cport;
     char cip[128];
-    int cfd = anetAccept(server.neterr, fd, cip, &cport);
+    int cfd = netAccept(server.neterr, fd, cip, &cport);
     if (cfd == AE_ERR) {
         redisLog(REDIS_DEBUG, "Accepting client connection: %s", server.neterr);
         return;
