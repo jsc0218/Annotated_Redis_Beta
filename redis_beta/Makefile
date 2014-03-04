@@ -18,7 +18,7 @@ dlist.o: dlist.c dlist.h
 event.o: event.c event.h
 net.o: net.c net.h
 dict.o: dict.c dict.h
-redis.o: redis.c event.h sds.h net.h dict.h dlist.h
+redis.o: redis.c redis.h event.h sds.h net.h dict.h dlist.h
 sds.o: sds.c sds.h
 
 redis-server: $(OBJ)

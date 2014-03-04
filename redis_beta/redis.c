@@ -2,140 +2,13 @@
  * Copyright (C) 2008 Salvatore Sanfilippo antirez at gmail dot com
  * All Rights Reserved. Under the GPL version 2. See the COPYING file. */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-#include <unistd.h>
-#include <signal.h>
-#include <sys/wait.h>
-#include <errno.h>
-#include <assert.h>
-#include <ctype.h>
-#include <stdarg.h>
-#include <inttypes.h>
-#include <arpa/inet.h>
+#include "redis.h"
 
-#include "event.h"  /* Event driven programming library */
-#include "sds.h"     /* Dynamic safe strings */
-#include "net.h"     /* Networking the easy way */
-#include "dict.h"    /* Hash tables */
-#include "dlist.h"    /* Linked lists */
-
-/* Error codes */
-#define REDIS_OK                0
-#define REDIS_ERR               -1
-
-/* Static server configuration */
-#define REDIS_SERVERPORT        6379    /* TCP port */
-#define REDIS_MAXIDLETIME       (60*5)  /* default client timeout */
-#define REDIS_QUERYBUF_LEN      1024
-#define REDIS_LOADBUF_LEN       1024
-#define REDIS_MAX_ARGS          16
-#define REDIS_DEFAULT_DBNUM     16
-#define REDIS_CONFIGLINE_MAX    1024
-
-/* Hash table parameters */
-#define REDIS_HT_MINFILL        10      /* Minimal hash table fill 10% */
-#define REDIS_HT_MINSLOTS       16384   /* Never resize the HT under this */
-
-/* Command types */
-#define REDIS_CMD_BULK          1
-#define REDIS_CMD_INLINE        0
-
-/* Object types */
-#define REDIS_STRING 0
-#define REDIS_LIST 1
-#define REDIS_SET 2
-#define REDIS_SELECTDB 254
-#define REDIS_EOF 255
-
-/* List related stuff */
-#define REDIS_HEAD 0
-#define REDIS_TAIL 1
-
-/* Log levels */
-#define REDIS_DEBUG 0
-#define REDIS_NOTICE 1
-#define REDIS_WARNING 2
-
-/* Anti-warning macro... */
-#define REDIS_NOTUSED(V) ((void) V)
-
-/*================================= Data types ============================== */
-
-/* With multiplexing we need to take per-client state.
- * Clients are taken in a liked list. */
-typedef struct redisClient {
-    int fd;
-    dict *dict;
-    sds querybuf;
-    sds argv[REDIS_MAX_ARGS];
-    int argc;
-    int bulklen;    /* bulk read len. -1 if not in bulk read mode */
-    list *reply;
-    int sentlen;
-    time_t lastinteraction; /* time of the last interaction, used for timeout */
-} redisClient;
-
-/* A redis object, that is a type able to hold a string / list / set */
-typedef struct redisObject {
-    int type;
-    void *ptr;
-    int refcount;
-} robj;
-
-/* Save after XX time and  XX change */
-struct saveparam {
-    time_t seconds;
-    int changes;
-};
-
-/* Global server state structure */
-struct redisServer {
-    int port;
-    int fd;
-    dict **dict;
-    long long dirty;            /* changes to DB from the last save */
-    list *clients;
-    char neterr[NET_ERR_LEN];
-    eEventLoop *el;
-    int verbosity;
-    int cronloops;
-    int maxidletime;
-    int dbnum;
-    list *objfreelist;          /* A list of freed objects to avoid malloc() */
-    int bgsaveinprogress;
-    time_t lastsave;
-    struct saveparam *saveparams;
-    int saveparamslen;
-    char *logfile;
-};
-
-typedef void redisCommandProc(redisClient *c);
-struct redisCommand {
-    char *name;
-    redisCommandProc *proc;
-    int arity;
-    int type;
-};
-
-struct sharedObjectsStruct {
-    robj *crlf, *ok, *err, *zerobulk, *nil, *zero, *one, *pong;
-} shared;
-
-/*================================ Prototypes =============================== */
-
-static void freeStringObject(robj *o);
-static void freeListObject(robj *o);
-static void freeSetObject(robj *o);
-static void decrRefCount(void *o);
-static robj *createObject(int type, void *ptr);
+/*================= Prototypes =================== */
 static void freeClient(redisClient *c);
 static int loadDb(char *filename);
-static void addReply(redisClient *c, robj *obj);
+static void addReply(redisClient *c, redisObject *obj);
 static void addReplySds(redisClient *c, sds s);
-static void incrRefCount(robj *o);
 static int saveDbBackground(char *filename);
 
 static void pingCommand(redisClient *c);
@@ -167,8 +40,7 @@ static void lindexCommand(redisClient *c);
 static void lrangeCommand(redisClient *c);
 static void ltrimCommand(redisClient *c);
 
-/*================================= Globals ================================= */
-
+/*=============================== Globals ============================ */
 /* Global vars */
 static struct redisServer server; /* server global state */
 static struct redisCommand cmdTable[] = {
@@ -205,53 +77,119 @@ static struct redisCommand cmdTable[] = {
     {"",NULL,0,0}
 };
 
-/*============================ Utility functions ============================ */
-
-/* Glob-style pattern matching. */
-int stringmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase)
+/* ========================= Random utility functions ====================== */
+/* Redis generally does not try to recover from out of memory conditions
+ * when allocating objects or strings, it is not clear if it will be possible
+ * to report this condition to the client since the networking layer itself
+ * is based on heap allocation for send buffers, so we simply abort.
+ * At least the code will be simpler to read... */
+static void oom(const char *msg)
 {
-    while(patternLen) {
-        switch(pattern[0]) {
+    fprintf(stderr, "%s: Out of memory\n",msg);
+    fflush(stderr);
+    sleep(1);
+    abort();
+}
+
+/* ======================= Redis objects implementation ===================== */
+static void freeStringObject(redisObject *obj)
+{
+    sdsfree(obj->ptr);
+}
+
+static void freeListObject(redisObject *obj)
+{
+    listRelease((list*) obj->ptr);
+}
+
+static void freeSetObject(redisObject *obj)
+{
+    /* TODO */
+	obj = obj;
+}
+
+static void incrRefCount(redisObject *obj)
+{
+	obj->refcount++;
+}
+
+static void decrRefCount(void *obj)
+{
+    redisObject *o = obj;
+    if (--(o->refcount) == 0) {
+        switch(o->type) {
+        case REDIS_STRING: freeStringObject(o); break;
+        case REDIS_LIST: freeListObject(o); break;
+        case REDIS_SET: freeSetObject(o); break;
+        default: assert(0 != 0); break;
+        }
+        if (!listAddNodeHead(server.objfreelist, o)) free(o);
+    }
+}
+
+static redisObject *createObject(int type, void *ptr)
+{
+    redisObject *obj;
+    if (listLength(server.objfreelist)) {
+        listNode *head = listFirst(server.objfreelist);
+        obj = listNodeValue(head);
+        listDelNode(server.objfreelist, head);
+    } else {
+        obj = malloc(sizeof(struct redisObject));
+    }
+    if (!obj) oom("createObject");
+    obj->type = type;
+    obj->ptr = ptr;
+    obj->refcount = 1;
+    return obj;
+}
+
+static redisObject *createListObject(void)
+{
+    list *l = listCreate();
+    if (!l) oom("createListObject");
+    listSetFreeMethod(l, decrRefCount);
+    return createObject(REDIS_LIST, l);
+}
+
+/*============================ Utility functions ========================= */
+/* Glob-style pattern matching. */
+int stringmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase) {
+    while (patternLen) {
+        switch (pattern[0]) {
         case '*':
             while (pattern[1] == '*') {
                 pattern++;
                 patternLen--;
             }
-            if (patternLen == 1)
-                return 1; /* match */
-            while(stringLen) {
-                if (stringmatchlen(pattern+1, patternLen-1,
-                            string, stringLen, nocase))
-                    return 1; /* match */
+            if (patternLen == 1) return 1; /* match */
+            while (stringLen) {
+                if (stringmatchlen(pattern+1, patternLen-1, string, stringLen, nocase)) return 1; /* match */
                 string++;
                 stringLen--;
             }
             return 0; /* no match */
             break;
         case '?':
-            if (stringLen == 0)
-                return 0; /* no match */
+            if (stringLen == 0) return 0; /* no match */
             string++;
             stringLen--;
             break;
         case '[':
         {
-            int not, match;
-
             pattern++;
             patternLen--;
-            not = pattern[0] == '^';
+            int not = pattern[0] == '^';
             if (not) {
                 pattern++;
                 patternLen--;
             }
-            match = 0;
-            while(1) {
+            int match = 0;
+            while (1) {
                 if (pattern[0] == '\\') {
                     pattern++;
                     patternLen--;
-                    if (pattern[0] == string[0])
-                        match = 1;
+                    if (pattern[0] == string[0]) match = 1;
                 } else if (pattern[0] == ']') {
                     break;
                 } else if (patternLen == 0) {
@@ -274,24 +212,19 @@ int stringmatchlen(const char *pattern, int patternLen, const char *string, int 
                     }
                     pattern += 2;
                     patternLen -= 2;
-                    if (c >= start && c <= end)
-                        match = 1;
+                    if (c >= start && c <= end) match = 1;
                 } else {
                     if (!nocase) {
-                        if (pattern[0] == string[0])
-                            match = 1;
+                        if (pattern[0] == string[0]) match = 1;
                     } else {
-                        if (tolower((int)pattern[0]) == tolower((int)string[0]))
-                            match = 1;
+                        if (tolower((int)pattern[0]) == tolower((int)string[0])) match = 1;
                     }
                 }
                 pattern++;
                 patternLen--;
             }
-            if (not)
-                match = !match;
-            if (!match)
-                return 0; /* no match */
+            if (not) match = !match;
+            if (!match) return 0; /* no match */
             string++;
             stringLen--;
             break;
@@ -304,11 +237,9 @@ int stringmatchlen(const char *pattern, int patternLen, const char *string, int 
             /* fall through */
         default:
             if (!nocase) {
-                if (pattern[0] != string[0])
-                    return 0; /* no match */
+                if (pattern[0] != string[0]) return 0; /* no match */
             } else {
-                if (tolower((int)pattern[0]) != tolower((int)string[0]))
-                    return 0; /* no match */
+                if (tolower((int)pattern[0]) != tolower((int)string[0])) return 0; /* no match */
             }
             string++;
             stringLen--;
@@ -324,12 +255,11 @@ int stringmatchlen(const char *pattern, int patternLen, const char *string, int 
             break;
         }
     }
-    if (patternLen == 0 && stringLen == 0)
-        return 1;
+    if (patternLen == 0 && stringLen == 0) return 1;
     return 0;
 }
 
-void redisLog(int level, const char *fmt, ...)
+static void redisLog(int level, const char *fmt, ...)
 {
     FILE *fp = (server.logfile == NULL) ? stdout : fopen(server.logfile, "a");
     if (!fp) return;
@@ -347,11 +277,9 @@ void redisLog(int level, const char *fmt, ...)
 }
 
 /*====================== Hash table type implementation  ==================== */
-
 /* This is an hash table type that uses the SDS dynamic strings library as
  * keys and redis objects as values (objects can hold SDS strings,
  * lists, sets). */
-
 static unsigned int sdsDictHashFunction(const void *key)
 {
     return dictGenHashFunction(key, sdslen((sds)key));
@@ -380,27 +308,12 @@ static void sdsDictValDestructor(void *privdata, void *val)
 
 dictType sdsDictType = {
     sdsDictHashFunction,       /* hash function */
-    NULL,                      /* key dup */
-    NULL,                      /* val dup */
+    NULL,                               /* key dup */
+    NULL,                               /* val dup */
     sdsDictKeyCompare,         /* key compare */
     sdsDictKeyDestructor,      /* key destructor */
-    sdsDictValDestructor,      /* val destructor */
+    sdsDictValDestructor,       /* val destructor */
 };
-
-/* ========================= Random utility functions ======================= */
-
-/* Redis generally does not try to recover from out of memory conditions
- * when allocating objects or strings, it is not clear if it will be possible
- * to report this condition to the client since the networking layer itself
- * is based on heap allocation for send buffers, so we simply abort.
- * At least the code will be simpler to read... */
-static void oom(const char *msg)
-{
-    fprintf(stderr, "%s: Out of memory\n",msg);
-    fflush(stderr);
-    sleep(1);
-    abort();
-}
 
 /* ====================== Redis server networking stuff ===================== */
 void closeTimedoutClients(void)
@@ -466,7 +379,7 @@ int serverCron(struct eEventLoop *eventLoop, long long id, void *clientData)
         /* If there is not a background saving in progress check if we have to save now */
          time_t now = time(NULL);
          for (int j = 0; j < server.saveparamslen; j++) {
-            struct saveparam *sp = server.saveparams + j;
+            struct saveParam *sp = server.saveparams + j;
             if (server.dirty >= sp->changes && now-server.lastsave > sp->seconds) {
                 redisLog(REDIS_NOTICE, "%d changes in %d seconds. Saving...", sp->changes, sp->seconds);
                 saveDbBackground("dump.rdb");
@@ -479,19 +392,19 @@ int serverCron(struct eEventLoop *eventLoop, long long id, void *clientData)
 
 static void createSharedObjects(void)
 {
-    shared.crlf = createObject(REDIS_STRING, sdsnew("\r\n"));
-    shared.ok = createObject(REDIS_STRING, sdsnew("+OK\r\n"));
-    shared.err = createObject(REDIS_STRING, sdsnew("-ERR\r\n"));
-    shared.zerobulk = createObject(REDIS_STRING, sdsnew("0\r\n\r\n"));
-    shared.nil = createObject(REDIS_STRING, sdsnew("nil\r\n"));
-    shared.zero = createObject(REDIS_STRING, sdsnew("0\r\n"));
-    shared.one = createObject(REDIS_STRING, sdsnew("1\r\n"));
-    shared.pong = createObject(REDIS_STRING, sdsnew("+PONG\r\n"));
+    sharedObjs.crlf = createObject(REDIS_STRING, sdsnew("\r\n"));
+    sharedObjs.ok = createObject(REDIS_STRING, sdsnew("+OK\r\n"));
+    sharedObjs.err = createObject(REDIS_STRING, sdsnew("-ERR\r\n"));
+    sharedObjs.zerobulk = createObject(REDIS_STRING, sdsnew("0\r\n\r\n"));
+    sharedObjs.nil = createObject(REDIS_STRING, sdsnew("nil\r\n"));
+    sharedObjs.zero = createObject(REDIS_STRING, sdsnew("0\r\n"));
+    sharedObjs.one = createObject(REDIS_STRING, sdsnew("1\r\n"));
+    sharedObjs.pong = createObject(REDIS_STRING, sdsnew("+PONG\r\n"));
 }
 
 static void appendServerSaveParams(time_t seconds, int changes)
 {
-    server.saveparams = realloc(server.saveparams, sizeof(struct saveparam)*(server.saveparamslen+1));
+    server.saveparams = realloc(server.saveparams, sizeof(struct saveParam)*(server.saveparamslen+1));
     if (server.saveparams == NULL) oom("appendServerSaveParams");
     server.saveparams[server.saveparamslen].seconds = seconds;
     server.saveparams[server.saveparamslen].changes = changes;
@@ -665,7 +578,7 @@ static void sendReplyToClient(eEventLoop *el, int fd, void *privdata, int mask)
     int nwritten = 0, totwritten = 0;
     redisClient *c = privdata;
     while (listLength(c->reply)) {
-    	robj *o = listNodeValue(listFirst(c->reply));
+    	redisObject *o = listNodeValue(listFirst(c->reply));
         int objlen = sdslen(o->ptr);
         if (objlen == 0) {
             listDelNode(c->reply, listFirst(c->reply));
@@ -889,7 +802,7 @@ static int createClient(int fd)
     return REDIS_OK;
 }
 
-static void addReply(redisClient *c, robj *obj)
+static void addReply(redisClient *c, redisObject *obj)
 {
     if (listLength(c->reply) == 0 &&
     		eCreateFileEvent(server.el, c->fd, E_WRITABLE, sendReplyToClient, c, NULL) == E_ERR) return;
@@ -899,7 +812,7 @@ static void addReply(redisClient *c, robj *obj)
 
 static void addReplySds(redisClient *c, sds s)
 {
-    robj *o = createObject(REDIS_STRING, s);
+    redisObject *o = createObject(REDIS_STRING, s);
     addReply(c,o);
     decrRefCount(o);
 }
@@ -922,67 +835,6 @@ static void acceptHandler(eEventLoop *el, int fd, void *privdata, int mask)
         redisLog(REDIS_WARNING, "Error allocating resources for the client");
         close(cfd); /* May be already closed, just ingore errors */
         return;
-    }
-}
-
-/* ======================= Redis objects implementation ===================== */
-static robj *createObject(int type, void *ptr)
-{
-    robj *o;
-    if (listLength(server.objfreelist)) {
-        listNode *head = listFirst(server.objfreelist);
-        o = listNodeValue(head);
-        listDelNode(server.objfreelist, head);
-    } else {
-        o = malloc(sizeof(*o));
-    }
-    if (!o) oom("createObject");
-    o->type = type;
-    o->ptr = ptr;
-    o->refcount = 1;
-    return o;
-}
-
-static robj *createListObject(void)
-{
-    list *l = listCreate();
-    if (!l) oom("createListObject");
-    listSetFreeMethod(l, decrRefCount);
-    return createObject(REDIS_LIST, l);
-}
-
-static void freeStringObject(robj *o)
-{
-    sdsfree(o->ptr);
-}
-
-static void freeListObject(robj *o)
-{
-    listRelease((list*) o->ptr);
-}
-
-static void freeSetObject(robj *o)
-{
-    /* TODO */
-    o = o;
-}
-
-static void incrRefCount(robj *o)
-{
-    o->refcount++;
-}
-
-static void decrRefCount(void *obj)
-{
-    robj *o = obj;
-    if (--(o->refcount) == 0) {
-        switch(o->type) {
-        case REDIS_STRING: freeStringObject(o); break;
-        case REDIS_LIST: freeListObject(o); break;
-        case REDIS_SET: freeSetObject(o); break;
-        default: assert(0 != 0); break;
-        }
-        if (!listAddNodeHead(server.objfreelist, o)) free(o);
     }
 }
 
@@ -1019,7 +871,7 @@ static int saveDb(char *filename)
         dictEntry *de;
         while ((de = dictNext(di)) != NULL) {
             sds key = dictGetEntryKey(de);
-            robj *o = dictGetEntryVal(de);
+            redisObject *o = dictGetEntryVal(de);
             type = o->type;
             len = htonl(sdslen(key));
             if (fwrite(&type,1,1,fp) == 0) goto werr;
@@ -1038,7 +890,7 @@ static int saveDb(char *filename)
                 len = htonl(listLength(list));
                 if (fwrite(&len,4,1,fp) == 0) goto werr;
                 while (ln) {
-                    robj *eleobj = listNodeValue(ln);
+                    redisObject *eleobj = listNodeValue(ln);
                     len = htonl(sdslen(eleobj->ptr));
                     if (fwrite(&len,4,1,fp) == 0) goto werr;
                     if (fwrite(eleobj->ptr,sdslen(eleobj->ptr),1,fp) == 0) goto werr;
@@ -1135,7 +987,7 @@ static int loadDb(char *filename)
             if (!key) oom("Loading DB from file");
         }
         if (fread(key,klen,1,fp) == 0) goto eoferr;
-        robj *o;
+        redisObject *o;
         if (type == REDIS_STRING) {
             /* Read string value */
         	uint32_t vlen;
@@ -1167,7 +1019,7 @@ static int loadDb(char *filename)
                     if (!val) oom("Loading DB from file");
                 }
                 if (fread(val,vlen,1,fp) == 0) goto eoferr;
-                robj *ele = createObject(REDIS_STRING, sdsnewlen(val,vlen));
+                redisObject *ele = createObject(REDIS_STRING, sdsnewlen(val,vlen));
                 if (!listAddNodeTail((list*)o->ptr, ele)) oom("listAddNodeTail");
                 /* free the temp buffer if needed */
                 if (val != vbuf) free(val);
@@ -1202,18 +1054,18 @@ eoferr: /* unexpected end of file is handled here with a fatal exit */
 
 static void pingCommand(redisClient *c)
 {
-    addReply(c, shared.pong);
+    addReply(c, sharedObjs.pong);
 }
 
 static void echoCommand(redisClient *c) {
     addReplySds(c,sdscatprintf(sdsempty(),"%d\r\n",(int)sdslen(c->argv[1])));
     addReplySds(c,c->argv[1]);
-    addReply(c,shared.crlf);
+    addReply(c,sharedObjs.crlf);
     c->argv[1] = NULL;
 }
 
 static void setGenericCommand(redisClient *c, int nx) {
-    robj *o = createObject(REDIS_STRING,c->argv[2]);
+    redisObject *o = createObject(REDIS_STRING,c->argv[2]);
     c->argv[2] = NULL;
     int retval = dictAdd(c->dict,c->argv[1],o);
     if (retval == DICT_ERR) {
@@ -1224,7 +1076,7 @@ static void setGenericCommand(redisClient *c, int nx) {
         c->argv[1] = NULL;
     }
     server.dirty++;
-    addReply(c,shared.ok);
+    addReply(c,sharedObjs.ok);
 }
 
 static void setCommand(redisClient *c) {
@@ -1238,9 +1090,9 @@ static void setnxCommand(redisClient *c) {
 static void getCommand(redisClient *c) {
     dictEntry *de = dictFind(c->dict,c->argv[1]);
     if (de == NULL) {
-        addReply(c,shared.nil);
+        addReply(c,sharedObjs.nil);
     } else {
-        robj *o = dictGetEntryVal(de);
+        redisObject *o = dictGetEntryVal(de);
         if (o->type != REDIS_STRING) {
             char *err = "GET against key not holding a string value";
             addReplySds(c,
@@ -1248,20 +1100,20 @@ static void getCommand(redisClient *c) {
         } else {
             addReplySds(c,sdscatprintf(sdsempty(),"%d\r\n",(int)sdslen(o->ptr)));
             addReply(c,o);
-            addReply(c,shared.crlf);
+            addReply(c,sharedObjs.crlf);
         }
     }
 }
 
 static void delCommand(redisClient *c) {
     if (dictDelete(c->dict,c->argv[1]) == DICT_OK) server.dirty++;
-    addReply(c,shared.ok);
+    addReply(c,sharedObjs.ok);
 }
 
 static void existsCommand(redisClient *c) {
     dictEntry *de = dictFind(c->dict,c->argv[1]);
-    if (de == NULL) addReply(c,shared.zero);
-    else addReply(c,shared.one);
+    if (de == NULL) addReply(c,sharedObjs.zero);
+    else addReply(c,sharedObjs.one);
 }
 
 static void incrDecrCommand(redisClient *c, int incr) {
@@ -1270,7 +1122,7 @@ static void incrDecrCommand(redisClient *c, int incr) {
     if (de == NULL) {
         value = 0;
     } else {
-        robj *o = dictGetEntryVal(de);
+        redisObject *o = dictGetEntryVal(de);
         if (o->type != REDIS_STRING) {
             value = 0;
         } else {
@@ -1281,7 +1133,7 @@ static void incrDecrCommand(redisClient *c, int incr) {
 
     value += incr;
     sds newval = sdscatprintf(sdsempty(),"%lld",value);
-    robj *o = createObject(REDIS_STRING,newval);
+    redisObject *o = createObject(REDIS_STRING,newval);
     int retval = dictAdd(c->dict,c->argv[1],o);
     if (retval == DICT_ERR) {
         dictReplace(c->dict,c->argv[1],o);
@@ -1291,7 +1143,7 @@ static void incrDecrCommand(redisClient *c, int incr) {
     }
     server.dirty++;
     addReply(c,o);
-    addReply(c,shared.crlf);
+    addReply(c,sharedObjs.crlf);
 }
 
 static void incrCommand(redisClient *c) {
@@ -1308,17 +1160,17 @@ static void selectCommand(redisClient *c) {
     if (selectDb(c,id) == REDIS_ERR) {
         addReplySds(c,"-ERR invalid DB index\r\n");
     } else {
-        addReply(c,shared.ok);
+        addReply(c,sharedObjs.ok);
     }
 }
 
 static void randomkeyCommand(redisClient *c) {
     dictEntry *de = dictGetRandomKey(c->dict);
     if (de == NULL) {
-        addReply(c,shared.crlf);
+        addReply(c,sharedObjs.crlf);
     } else {
         addReply(c,dictGetEntryVal(de));
-        addReply(c,shared.crlf);
+        addReply(c,sharedObjs.crlf);
     }
 }
 
@@ -1355,8 +1207,8 @@ static void lastsaveCommand(redisClient *c) {
 }
 
 static void saveCommand(redisClient *c) {
-    if (saveDb("dump.rdb") == REDIS_OK) addReply(c,shared.ok);
-    else addReply(c,shared.err);
+    if (saveDb("dump.rdb") == REDIS_OK) addReply(c,sharedObjs.ok);
+    else addReply(c,sharedObjs.err);
 }
 
 static void bgsaveCommand(redisClient *c) {
@@ -1364,8 +1216,8 @@ static void bgsaveCommand(redisClient *c) {
         addReplySds(c,sdsnew("-ERR background save already in progress\r\n"));
         return;
     }
-    if (saveDbBackground("dump.rdb") == REDIS_OK) addReply(c,shared.ok);
-    else addReply(c,shared.err);
+    if (saveDbBackground("dump.rdb") == REDIS_OK) addReply(c,sharedObjs.ok);
+    else addReply(c,sharedObjs.err);
 }
 
 static void shutdownCommand(redisClient *c) {
@@ -1391,7 +1243,7 @@ static void renameGenericCommand(redisClient *c, int nx) {
         addReplySds(c,sdsnew("-ERR no such key\r\n"));
         return;
     }
-    robj *o = dictGetEntryVal(de);
+    redisObject *o = dictGetEntryVal(de);
     incrRefCount(o);
     if (dictAdd(c->dict,c->argv[2],o) == DICT_ERR) {
         if (nx) {
@@ -1405,7 +1257,7 @@ static void renameGenericCommand(redisClient *c, int nx) {
     }
     dictDelete(c->dict,c->argv[1]);
     server.dirty++;
-    addReply(c,shared.ok);
+    addReply(c,sharedObjs.ok);
 }
 
 static void renameCommand(redisClient *c) {
@@ -1442,7 +1294,7 @@ static void moveCommand(redisClient *c) {
 
     /* Try to add the element to the target DB */
     sds *key = dictGetEntryKey(de);
-    robj *o = dictGetEntryVal(de);
+    redisObject *o = dictGetEntryVal(de);
     if (dictAdd(dst,key,o) == DICT_ERR) {
         addReplySds(c,sdsnew("-ERR target DB already contains the moved key\r\n"));
         return;
@@ -1451,14 +1303,14 @@ static void moveCommand(redisClient *c) {
     /* OK! key moved, free the entry in the source DB */
     dictDeleteNoFree(src,c->argv[1]);
     server.dirty++;
-    addReply(c,shared.ok);
+    addReply(c,sharedObjs.ok);
 }
 
 static void pushGenericCommand(redisClient *c, int where) {
-    robj *lobj;
+    redisObject *lobj;
     list *list;
     
-    robj *ele = createObject(REDIS_STRING,c->argv[2]);
+    redisObject *ele = createObject(REDIS_STRING,c->argv[2]);
     c->argv[2] = NULL;
 
     dictEntry *de = dictFind(c->dict,c->argv[1]);
@@ -1489,7 +1341,7 @@ static void pushGenericCommand(redisClient *c, int where) {
         }
     }
     server.dirty++;
-    addReply(c,shared.ok);
+    addReply(c,sharedObjs.ok);
 }
 
 static void lpushCommand(redisClient *c) {
@@ -1505,10 +1357,10 @@ static void llenCommand(redisClient *c) {
     
     dictEntry *de = dictFind(c->dict,c->argv[1]);
     if (de == NULL) {
-        addReply(c,shared.zero);
+        addReply(c,sharedObjs.zero);
         return;
     } else {
-        robj *o = dictGetEntryVal(de);
+        redisObject *o = dictGetEntryVal(de);
         if (o->type != REDIS_LIST) {
             addReplySds(c,sdsnew("-1\r\n"));
         } else {
@@ -1523,9 +1375,9 @@ static void lindexCommand(redisClient *c) {
     
     dictEntry *de = dictFind(c->dict,c->argv[1]);
     if (de == NULL) {
-        addReply(c,shared.nil);
+        addReply(c,sharedObjs.nil);
     } else {
-        robj *o = dictGetEntryVal(de);
+        redisObject *o = dictGetEntryVal(de);
         if (o->type != REDIS_LIST) {
             char *err = "LINDEX against key not holding a list value";
             addReplySds(c, sdscatprintf(sdsempty(),"%d\r\n%s\r\n",-((int)strlen(err)),err));
@@ -1533,12 +1385,12 @@ static void lindexCommand(redisClient *c) {
             list *list = o->ptr;
             listNode *ln = listIndex(list, index);
             if (ln == NULL) {
-                addReply(c,shared.nil);
+                addReply(c,sharedObjs.nil);
             } else {
-                robj *ele = listNodeValue(ln);
+                redisObject *ele = listNodeValue(ln);
                 addReplySds(c,sdscatprintf(sdsempty(),"%d\r\n",(int)sdslen(ele->ptr)));
                 addReply(c,ele);
-                addReply(c,shared.crlf);
+                addReply(c,sharedObjs.crlf);
             }
         }
     }
@@ -1547,9 +1399,9 @@ static void lindexCommand(redisClient *c) {
 static void popGenericCommand(redisClient *c, int where) {
     dictEntry *de = dictFind(c->dict,c->argv[1]);
     if (de == NULL) {
-        addReply(c,shared.nil);
+        addReply(c,sharedObjs.nil);
     } else {
-        robj *o = dictGetEntryVal(de);
+        redisObject *o = dictGetEntryVal(de);
         
         if (o->type != REDIS_LIST) {
             char *err = "POP against key not holding a list value";
@@ -1562,12 +1414,12 @@ static void popGenericCommand(redisClient *c, int where) {
             else ln = listLast(list);
 
             if (ln == NULL) {
-                addReply(c,shared.nil);
+                addReply(c,sharedObjs.nil);
             } else {
-                robj *ele = listNodeValue(ln);
+                redisObject *ele = listNodeValue(ln);
                 addReplySds(c,sdscatprintf(sdsempty(),"%d\r\n",(int)sdslen(ele->ptr)));
                 addReply(c,ele);
-                addReply(c,shared.crlf);
+                addReply(c,sharedObjs.crlf);
                 listDelNode(list,ln);
                 server.dirty++;
             }
@@ -1589,16 +1441,16 @@ static void lrangeCommand(redisClient *c) {
     
     dictEntry *de = dictFind(c->dict,c->argv[1]);
     if (de == NULL) {
-        addReply(c,shared.nil);
+        addReply(c,sharedObjs.nil);
     } else {
-        robj *o = dictGetEntryVal(de);
+        redisObject *o = dictGetEntryVal(de);
         if (o->type != REDIS_LIST) {
             char *err = "LRANGE against key not holding a list value";
             addReplySds(c, sdscatprintf(sdsempty(),"%d\r\n%s\r\n",-((int)strlen(err)),err));
         } else {
             list *list = o->ptr;
             int llen = listLength(list);
-            robj *ele;
+            redisObject *ele;
 
             /* convert negative indexes */
             if (start < 0) start = llen+start;
@@ -1609,7 +1461,7 @@ static void lrangeCommand(redisClient *c) {
             /* indexes sanity checks */
             if (start > end || start >= llen) {
                 /* Out of range start or start > end result in empty list */
-                addReply(c,shared.zero);
+                addReply(c,sharedObjs.zero);
                 return;
             }
             if (end >= llen) end = llen-1;
@@ -1622,7 +1474,7 @@ static void lrangeCommand(redisClient *c) {
                 ele = listNodeValue(ln);
                 addReplySds(c,sdscatprintf(sdsempty(),"%d\r\n",(int)sdslen(ele->ptr)));
                 addReply(c,ele);
-                addReply(c,shared.crlf);
+                addReply(c,sharedObjs.crlf);
                 ln = ln->next;
             }
         }
@@ -1637,7 +1489,7 @@ static void ltrimCommand(redisClient *c) {
     if (de == NULL) {
         addReplySds(c,sdsnew("-ERR no such key\r\n"));
     } else {
-        robj *o = dictGetEntryVal(de);
+        redisObject *o = dictGetEntryVal(de);
         
         if (o->type != REDIS_LIST) {
             addReplySds(c, sdsnew("-ERR LTRIM against key not holding a list value"));
@@ -1673,7 +1525,7 @@ static void ltrimCommand(redisClient *c) {
                 ln = listLast(list);
                 listDelNode(list,ln);
             }
-            addReply(c,shared.ok);
+            addReply(c,sharedObjs.ok);
         }
     }
 }
