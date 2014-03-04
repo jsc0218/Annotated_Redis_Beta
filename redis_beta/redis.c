@@ -16,11 +16,11 @@
 #include <inttypes.h>
 #include <arpa/inet.h>
 
-#include "ae.h"     /* Event driven programming library */
-#include "sds.h"    /* Dynamic safe strings */
-#include "net.h"   /* Networking the easy way */
-#include "dict.h"   /* Hash tables */
-#include "dlist.h" /* Linked lists */
+#include "event.h"  /* Event driven programming library */
+#include "sds.h"     /* Dynamic safe strings */
+#include "net.h"     /* Networking the easy way */
+#include "dict.h"    /* Hash tables */
+#include "dlist.h"    /* Linked lists */
 
 /* Error codes */
 #define REDIS_OK                0
@@ -99,7 +99,7 @@ struct redisServer {
     long long dirty;            /* changes to DB from the last save */
     list *clients;
     char neterr[NET_ERR_LEN];
-    aeEventLoop *el;
+    eEventLoop *el;
     int verbosity;
     int cronloops;
     int maxidletime;
@@ -405,7 +405,7 @@ static void oom(const char *msg)
 /* ====================== Redis server networking stuff ===================== */
 void closeTimedoutClients(void)
 {
-    listIter *li = listGetIterator(server.clients, AL_START_HEAD);
+    listIter *li = listGetIterator(server.clients, DL_START_HEAD);
     if (!li) return;
     listNode *ln;
     while ((ln = listNextElement(li)) != NULL) {
@@ -419,7 +419,7 @@ void closeTimedoutClients(void)
     listReleaseIterator(li);
 }
 
-int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData)
+int serverCron(struct eEventLoop *eventLoop, long long id, void *clientData)
 {
     REDIS_NOTUSED(eventLoop);
     REDIS_NOTUSED(id);
@@ -527,7 +527,7 @@ static void initServer()
     server.clients = listCreate();
     server.objfreelist = listCreate();
     createSharedObjects();
-    server.el = aeCreateEventLoop();
+    server.el = eCreateEventLoop();
     server.dict = malloc(sizeof(dict*) * server.dbnum);
     if (!server.dict || !server.clients || !server.el || !server.objfreelist) oom("server initialization"); /* Fatal OOM */
     server.fd = netTcpServer(server.neterr, server.port, NULL);
@@ -543,7 +543,7 @@ static void initServer()
     server.bgsaveinprogress = 0;
     server.lastsave = time(NULL);
     server.dirty = 0;
-    aeCreateTimeEvent(server.el, 1000, serverCron, NULL, NULL);
+    eCreateTimeEvent(server.el, 1000, serverCron, NULL, NULL);
 }
 
 /* I agree, this is a very rudimental way to load a configuration...
@@ -645,8 +645,8 @@ static void freeClientArgv(redisClient *c)
 
 static void freeClient(redisClient *c)
 {
-    aeDeleteFileEvent(server.el, c->fd, AE_READABLE);
-    aeDeleteFileEvent(server.el, c->fd, AE_WRITABLE);
+    eDeleteFileEvent(server.el, c->fd, E_READABLE);
+    eDeleteFileEvent(server.el, c->fd, E_WRITABLE);
     sdsfree(c->querybuf);
     listRelease(c->reply);
     freeClientArgv(c);
@@ -657,7 +657,7 @@ static void freeClient(redisClient *c)
     free(c);
 }
 
-static void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask)
+static void sendReplyToClient(eEventLoop *el, int fd, void *privdata, int mask)
 {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
@@ -694,7 +694,7 @@ static void sendReplyToClient(aeEventLoop *el, int fd, void *privdata, int mask)
     if (totwritten > 0) c->lastinteraction = time(NULL);
     if (listLength(c->reply) == 0) {
         c->sentlen = 0;
-        aeDeleteFileEvent(server.el, c->fd, AE_WRITABLE);
+        eDeleteFileEvent(server.el, c->fd, E_WRITABLE);
     }
 }
 
@@ -770,7 +770,7 @@ static int processCommand(redisClient *c)
     return 1;
 }
 
-static void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask)
+static void readQueryFromClient(eEventLoop *el, int fd, void *privdata, int mask)
 {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
@@ -881,7 +881,7 @@ static int createClient(int fd)
     c->lastinteraction = time(NULL);
     if ((c->reply = listCreate()) == NULL) oom("listCreate");
     listSetFreeMethod(c->reply, decrRefCount);
-    if (aeCreateFileEvent(server.el, c->fd, AE_READABLE, readQueryFromClient, c, NULL) == AE_ERR) {
+    if (eCreateFileEvent(server.el, c->fd, E_READABLE, readQueryFromClient, c, NULL) == E_ERR) {
         freeClient(c);
         return REDIS_ERR;
     }
@@ -892,7 +892,7 @@ static int createClient(int fd)
 static void addReply(redisClient *c, robj *obj)
 {
     if (listLength(c->reply) == 0 &&
-    		aeCreateFileEvent(server.el, c->fd, AE_WRITABLE, sendReplyToClient, c, NULL) == AE_ERR) return;
+    		eCreateFileEvent(server.el, c->fd, E_WRITABLE, sendReplyToClient, c, NULL) == E_ERR) return;
     if (!listAddNodeTail(c->reply, obj)) oom("listAddNodeTail");
     incrRefCount(obj);
 }
@@ -904,7 +904,7 @@ static void addReplySds(redisClient *c, sds s)
     decrRefCount(o);
 }
 
-static void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask)
+static void acceptHandler(eEventLoop *el, int fd, void *privdata, int mask)
 {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
@@ -913,7 +913,7 @@ static void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask)
     int cport;
     char cip[128];
     int cfd = netAccept(server.neterr, fd, cip, &cport);
-    if (cfd == AE_ERR) {
+    if (cfd == E_ERR) {
         redisLog(REDIS_DEBUG, "Accepting client connection: %s", server.neterr);
         return;
     }
@@ -1694,10 +1694,10 @@ int main(int argc, char **argv) {
     redisLog(REDIS_NOTICE, "Server started");
     if (loadDb("dump.rdb") == REDIS_OK)
         redisLog(REDIS_NOTICE, "DB loaded from disk");
-    if (aeCreateFileEvent(server.el, server.fd, AE_READABLE, acceptHandler, NULL, NULL) == AE_ERR)
+    if (eCreateFileEvent(server.el, server.fd, E_READABLE, acceptHandler, NULL, NULL) == E_ERR)
     	oom("creating file event");
     redisLog(REDIS_NOTICE, "The server is now ready to accept connections");
-    aeMain(server.el);
-    aeDeleteEventLoop(server.el);
+    eMain(server.el);
+    eDeleteEventLoop(server.el);
     return 0;
 }

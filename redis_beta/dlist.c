@@ -106,7 +106,7 @@ listIter *listGetIterator(list *list, int direction)
 {
     listIter *iter = malloc(sizeof(struct listIter));
     if (iter == NULL) return NULL;
-    if (direction == AL_START_HEAD) {
+    if (direction == DL_START_HEAD) {
     	iter->next = list->head;
     	iter->prev = NULL;
     } else {
@@ -141,7 +141,7 @@ listNode *listNextElement(listIter *iter)
 {
     listNode *current = iter->next;
     if (current != NULL) {
-        if (iter->direction == AL_START_HEAD) iter->next = current->next;
+        if (iter->direction == DL_START_HEAD) iter->next = current->next;
         else iter->next = current->prev;
     }
     return current;
@@ -158,7 +158,7 @@ listNode *listNextElement(listIter *iter)
  * NULL is returned. */
 listNode *listSearchKey(list *list, void *value)
 {
-    listIter *iter = listGetIterator(list, AL_START_HEAD);
+    listIter *iter = listGetIterator(list, DL_START_HEAD);
     listNode *node;
     while((node = listNextElement(iter)) != NULL) {
         if (list->match) {

@@ -57,7 +57,7 @@ listNode *listSearchKey(list *list, void *value);
 listNode *listIndex(list *list, int index);
 
 /* Directions for iterators */
-#define AL_START_HEAD 0
-#define AL_START_TAIL 1
+#define DL_START_HEAD 0
+#define DL_START_TAIL 1
 
 #endif /* __DLIST_H__ */

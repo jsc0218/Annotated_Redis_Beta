@@ -7,7 +7,7 @@ DEBUG?= -g
 CFLAGS?= -O2 -Wall -W -DSDS_ABORT_ON_OOM -std=gnu99
 CCOPT= $(CFLAGS)
 
-OBJ = dlist.o ae.o net.o dict.o redis.o sds.o picol.o
+OBJ = dlist.o event.o net.o dict.o redis.o sds.o picol.o
 PRGNAME = redis-server
 
 all: redis-server
@@ -15,10 +15,10 @@ all: redis-server
 # Deps (use make dep to generate this)
 picol.o: picol.c picol.h
 dlist.o: dlist.c dlist.h
-ae.o: ae.c ae.h
+event.o: event.c event.h
 net.o: net.c net.h
 dict.o: dict.c dict.h
-redis.o: redis.c ae.h sds.h net.h dict.h dlist.h
+redis.o: redis.c event.h sds.h net.h dict.h dlist.h
 sds.o: sds.c sds.h
 
 redis-server: $(OBJ)
