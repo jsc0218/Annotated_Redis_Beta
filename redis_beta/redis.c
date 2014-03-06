@@ -316,7 +316,37 @@ dictType sdsDictType = {
 };
 
 /* ====================== Redis server networking stuff ===================== */
-void closeTimedoutClients(void)
+static void appendServerSaveParams(time_t seconds, int changes)
+{
+    server.saveparams = realloc(server.saveparams, sizeof(struct saveParam)*(server.saveparamslen+1));
+    if (server.saveparams == NULL) oom("appendServerSaveParams");
+    server.saveparams[server.saveparamslen].seconds = seconds;
+    server.saveparams[server.saveparamslen].changes = changes;
+    server.saveparamslen++;
+}
+
+static void ResetServerSaveParams()
+{
+    free(server.saveparams);
+    server.saveparams = NULL;
+    server.saveparamslen = 0;
+}
+
+static void initServerConfig()
+{
+    server.dbnum = REDIS_DEFAULT_DBNUM;
+    server.port = REDIS_SERVERPORT;
+    server.verbosity = REDIS_DEBUG;
+    server.maxidletime = REDIS_MAXIDLETIME;
+    server.saveparams = NULL;
+    server.saveparamslen = 0;
+    server.logfile = NULL; /* NULL = log on standard output */
+    appendServerSaveParams(60*60, 1);  /* save after 1 hour and 1 change */
+    appendServerSaveParams(300, 100);  /* save after 5 minutes and 100 changes */
+    appendServerSaveParams(60, 10000); /* save after 1 minute and 10000 changes */
+}
+
+static void closeTimedoutClients(void)
 {
     listIter *li = listGetIterator(server.clients, DL_START_HEAD);
     if (!li) return;
@@ -332,7 +362,7 @@ void closeTimedoutClients(void)
     listReleaseIterator(li);
 }
 
-int serverCron(struct eEventLoop *eventLoop, long long id, void *clientData)
+static int serverCron(struct eEventLoop *eventLoop, long long id, void *clientData)
 {
     REDIS_NOTUSED(eventLoop);
     REDIS_NOTUSED(id);
@@ -400,36 +430,6 @@ static void createSharedObjects(void)
     sharedObjs.zero = createObject(REDIS_STRING, sdsnew("0\r\n"));
     sharedObjs.one = createObject(REDIS_STRING, sdsnew("1\r\n"));
     sharedObjs.pong = createObject(REDIS_STRING, sdsnew("+PONG\r\n"));
-}
-
-static void appendServerSaveParams(time_t seconds, int changes)
-{
-    server.saveparams = realloc(server.saveparams, sizeof(struct saveParam)*(server.saveparamslen+1));
-    if (server.saveparams == NULL) oom("appendServerSaveParams");
-    server.saveparams[server.saveparamslen].seconds = seconds;
-    server.saveparams[server.saveparamslen].changes = changes;
-    server.saveparamslen++;
-}
-
-static void ResetServerSaveParams()
-{
-    free(server.saveparams);
-    server.saveparams = NULL;
-    server.saveparamslen = 0;
-}
-
-static void initServerConfig()
-{
-    server.dbnum = REDIS_DEFAULT_DBNUM;
-    server.port = REDIS_SERVERPORT;
-    server.verbosity = REDIS_DEBUG;
-    server.maxidletime = REDIS_MAXIDLETIME;
-    server.saveparams = NULL;
-    server.logfile = NULL; /* NULL = log on standard output */
-    ResetServerSaveParams();
-    appendServerSaveParams(60*60, 1);  /* save after 1 hour and 1 change */
-    appendServerSaveParams(300, 100);  /* save after 5 minutes and 100 changes */
-    appendServerSaveParams(60, 10000); /* save after 1 minute and 10000 changes */
 }
 
 static void initServer()
