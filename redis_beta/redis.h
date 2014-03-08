@@ -115,7 +115,7 @@ typedef void redisCommandProc(redisClient *client);
 struct redisCommand {
     char *name;
     redisCommandProc *proc;
-    int arity;
+    int argc;
     int type;
 };
 

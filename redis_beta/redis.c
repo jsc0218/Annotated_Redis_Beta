@@ -5,9 +5,6 @@
 #include "redis.h"
 
 /*================= Prototypes =================== */
-static int loadDb(char *filename);
-static int saveDbBackground(char *filename);
-static void addReply(redisClient *c, redisObject *obj);
 static void addReplySds(redisClient *client, sds s);
 
 static void pingCommand(redisClient *client);
@@ -314,6 +311,217 @@ dictType sdsDictType = {
     sdsDictValDestructor,       /* val destructor */
 };
 
+/*============================ DB saving/loading ============================ */
+/* Save the DB on disk. Return REDIS_ERR on error, REDIS_OK on success */
+static int saveDb(char *filename)
+{
+    char tmpfile[256];
+    snprintf(tmpfile, sizeof(tmpfile), "temp-%d.%ld.rdb", (int)time(NULL), (long int)random());
+    FILE *fp = fopen(tmpfile, "w");
+    if (!fp) {
+        redisLog(REDIS_WARNING, "Failed saving the DB: %s", strerror(errno));
+        return REDIS_ERR;
+    }
+    if (fwrite("REDIS0000", 9, 1, fp) == 0) goto error;
+    dictIterator *di = NULL;
+    for (int j = 0; j < server.dbnum; j++) {
+        dict *dict = server.dict[j];
+        if (dictGetHashTableUsed(dict) == 0) continue;
+        di = dictGetIterator(dict);
+        if (!di) {
+            fclose(fp);
+            return REDIS_ERR;
+        }
+
+        /* Write the SELECT DB opcode */
+        uint8_t type = REDIS_SELECTDB;
+        uint32_t len = htonl(j);
+        if (fwrite(&type, 1, 1, fp) == 0) goto error;
+        if (fwrite(&len, 4, 1, fp) == 0) goto error;
+
+        /* Iterate this DB writing every entry */
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            sds key = dictGetEntryKey(de);
+            redisObject *obj = dictGetEntryVal(de);
+            type = obj->type;
+            len = htonl(sdslen(key));
+            if (fwrite(&type, 1, 1, fp) == 0) goto error;
+            if (fwrite(&len, 4, 1, fp) == 0) goto error;
+            if (fwrite(key, sdslen(key), 1, fp) == 0) goto error;
+            if (type == REDIS_STRING) {
+                /* Save a string value */
+                sds val = obj->ptr;
+                len = htonl(sdslen(val));
+                if (fwrite(&len, 4, 1, fp) == 0) goto error;
+                if (fwrite(val, sdslen(val), 1, fp) == 0) goto error;
+            } else if (type == REDIS_LIST) {
+                /* Save a list value */
+                list *list = obj->ptr;
+                listNode *node = list->head;
+                len = htonl(listLength(list));
+                if (fwrite(&len, 4, 1, fp) == 0) goto error;
+                while (node) {
+                    redisObject *elem = listNodeValue(node);
+                    len = htonl(sdslen(elem->ptr));
+                    if (fwrite(&len, 4, 1 ,fp) == 0) goto error;
+                    if (fwrite(elem->ptr, sdslen(elem->ptr), 1, fp) == 0) goto error;
+                    node = node->next;
+                }
+            } else {
+                assert(0 != 0);
+            }
+        }
+        dictReleaseIterator(di);
+    }
+    /* EOF opcode */
+    uint8_t type = REDIS_EOF;
+    if (fwrite(&type, 1, 1, fp) == 0) goto error;
+    fclose(fp);
+
+    /* Use RENAME to make sure the DB file is changed atomically
+     * only if the generate DB file is ok. */
+    if (rename(tmpfile, filename) == -1) {
+        redisLog(REDIS_WARNING, "Error moving temp DB file on the final destionation: %s", strerror(errno));
+        unlink(tmpfile);
+        return REDIS_ERR;
+    }
+    redisLog(REDIS_NOTICE, "DB saved on disk");
+    server.dirty = 0;
+    server.lastsave = time(NULL);
+    return REDIS_OK;
+
+error:
+    fclose(fp);
+    redisLog(REDIS_WARNING, "Error saving DB on disk: %s", strerror(errno));
+    if (di) dictReleaseIterator(di);
+    return REDIS_ERR;
+}
+
+static int saveDbBackground(char *filename)
+{
+    if (server.bgsaveinprogress) return REDIS_ERR;
+    pid_t childpid = fork();
+    if (childpid == 0) {
+        /* Child */
+        close(server.fd);
+        if (saveDb(filename) == REDIS_OK) exit(0);
+        else exit(1);
+    } else {
+        /* Parent */
+        redisLog(REDIS_NOTICE, "Background saving started by pid %d", childpid);
+        server.bgsaveinprogress = 1;
+        return REDIS_OK;
+    }
+    return REDIS_OK;  /* unreached */
+}
+
+static int loadDb(char *filename)
+{
+    FILE *fp = fopen(filename, "r");
+    if (!fp) return REDIS_ERR;
+    char buf[REDIS_LOADBUF_LEN];    /* Try to use this buffer instead */
+    if (fread(buf, 9, 1, fp) == 0) goto error;
+    if (memcmp(buf, "REDIS0000", 9) != 0) {
+        fclose(fp);
+        redisLog(REDIS_WARNING, "Wrong signature trying to load DB from file");
+        return REDIS_ERR;
+    }
+    char vbuf[REDIS_LOADBUF_LEN];   /* malloc() when the element is small */
+    char *key = NULL, *val = NULL;
+    dict *dict = server.dict[0];
+    while (1) {
+        /* Read type. */
+        uint8_t type;
+        if (fread(&type, 1, 1, fp) == 0) goto error;
+        if (type == REDIS_EOF) break;
+        /* Handle SELECT DB opcode as a special case */
+        if (type == REDIS_SELECTDB) {
+        	uint32_t dbid;
+            if (fread(&dbid, 4, 1, fp) == 0) goto error;
+            dbid = ntohl(dbid);
+            if (dbid >= (unsigned)server.dbnum) {
+                redisLog(REDIS_WARNING, "FATAL: Data file was created with a Redis server "
+                		"compiled to handle more than %d databases. Exiting\n", server.dbnum);
+                exit(1);
+            }
+            dict = server.dict[dbid];
+            continue;
+        }
+        /* Read key */
+        uint32_t klen;
+        if (fread(&klen, 4, 1, fp) == 0) goto error;
+        klen = ntohl(klen);
+        if (klen <= REDIS_LOADBUF_LEN) {
+            key = buf;
+        } else {
+            key = malloc(klen);
+            if (!key) oom("Loading DB from file");
+        }
+        if (fread(key, klen, 1, fp) == 0) goto error;
+        redisObject *obj;
+        if (type == REDIS_STRING) {
+            /* Read string value */
+        	uint32_t vlen;
+            if (fread(&vlen, 4, 1, fp) == 0) goto error;
+            vlen = ntohl(vlen);
+            if (vlen <= REDIS_LOADBUF_LEN) {
+                val = vbuf;
+            } else {
+                val = malloc(vlen);
+                if (!val) oom("Loading DB from file");
+            }
+            if (fread(val, vlen, 1, fp) == 0) goto error;
+            obj = createObject(REDIS_STRING, sdsnewlen(val, vlen));
+        } else if (type == REDIS_LIST) {
+            /* Read list value */
+            uint32_t listlen;
+            if (fread(&listlen, 4, 1, fp) == 0) goto error;
+            listlen = ntohl(listlen);
+            obj = createListObject();
+            /* Load every single element of the list */
+            while (listlen--) {
+                uint32_t vlen;
+                if (fread(&vlen, 4, 1, fp) == 0) goto error;
+                vlen = ntohl(vlen);
+                if (vlen <= REDIS_LOADBUF_LEN) {
+                    val = vbuf;
+                } else {
+                    val = malloc(vlen);
+                    if (!val) oom("Loading DB from file");
+                }
+                if (fread(val, vlen, 1, fp) == 0) goto error;
+                redisObject *elem = createObject(REDIS_STRING, sdsnewlen(val, vlen));
+                if (!listAddNodeTail((list*)obj->ptr, elem)) oom("listAddNodeTail");
+                /* free the temp buffer if needed */
+                if (val != vbuf) free(val);
+                val = NULL;
+            }
+        } else {
+            assert(0 != 0);
+        }
+        /* Add the new object in the hash table */
+        int retval = dictAdd(dict, sdsnewlen(key, klen), obj);
+        if (retval == DICT_ERR) {
+            redisLog(REDIS_WARNING, "Loading DB, duplicated key found! Unrecoverable error, exiting now.");
+            exit(1);
+        }
+        /* Iteration cleanup */
+        if (key != buf) free(key);
+        if (val != vbuf) free(val);
+        key = val = NULL;
+    }
+    fclose(fp);
+    return REDIS_OK;
+
+error: /* unexpected end of file is handled here with a fatal exit */
+    if (key != buf) free(key);
+    if (val != vbuf) free(val);
+    redisLog(REDIS_WARNING, "Short read loading DB. Unrecoverable error, exiting now.");
+    exit(1);
+    return REDIS_ERR; /* Just to avoid warning */
+}
+
 /* ====================== Redis server networking stuff ===================== */
 static void appendServerSaveParams(time_t seconds, int changes)
 {
@@ -453,9 +661,9 @@ static void initServer()
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
 
-    createSharedObjects();
     server.clients = listCreate();
     server.objfreelist = listCreate();
+    createSharedObjects();
     server.el = eCreateEventLoop();
     server.dict = malloc(sizeof(dict *) * server.dbnum);
     if (!server.dict || !server.clients || !server.el || !server.objfreelist) oom("server initialization"); /* Fatal OOM */
@@ -491,48 +699,45 @@ static void loadServerConfig(char *filename)
         linenum++;
         line = sdsnew(buf);
         line = sdstrim(line, " \t\r\n");
-
         /* Skip comments and blank lines*/
         if (line[0] == '#' || line[0] == '\0') {
             sdsfree(line);
             continue;
         }
-
         /* Split into arguments */
         int argc;
         sds *argv = sdssplitlen(line, sdslen(line), " ", 1, &argc);
-
         /* Execute config directives */
-        if (!strcmp(argv[0],"timeout") && argc == 2) {
+        if (!strcmp(argv[0], "timeout") && argc == 2) {
             server.maxidletime = atoi(argv[1]);
             if (server.maxidletime < 1) {
             	err = "Invalid timeout value";
             	goto loaderr;
             }
-        } else if (!strcmp(argv[0],"save") && argc == 3) {
+        } else if (!strcmp(argv[0], "save") && argc == 3) {
             int seconds = atoi(argv[1]);
             int changes = atoi(argv[2]);
             if (seconds < 1 || changes < 0) {
             	err = "Invalid save parameters";
             	goto loaderr;
             }
-            appendServerSaveParams(seconds,changes);
-        } else if (!strcmp(argv[0],"dir") && argc == 2) {
+            appendServerSaveParams(seconds, changes);
+        } else if (!strcmp(argv[0], "dir") && argc == 2) {
             if (chdir(argv[1]) == -1) {
                 redisLog(REDIS_WARNING, "Can't chdir to '%s': %s", argv[1], strerror(errno));
                 exit(1);
             }
-        } else if (!strcmp(argv[0],"loglevel") && argc == 2) {
-            if (!strcmp(argv[1],"debug")) server.verbosity = REDIS_DEBUG;
-            else if (!strcmp(argv[1],"notice")) server.verbosity = REDIS_NOTICE;
-            else if (!strcmp(argv[1],"warning")) server.verbosity = REDIS_WARNING;
+        } else if (!strcmp(argv[0], "loglevel") && argc == 2) {
+            if (!strcmp(argv[1], "debug")) server.verbosity = REDIS_DEBUG;
+            else if (!strcmp(argv[1], "notice")) server.verbosity = REDIS_NOTICE;
+            else if (!strcmp(argv[1], "warning")) server.verbosity = REDIS_WARNING;
             else {
                 err = "Invalid log level. Must be one of debug, notice, warning";
                 goto loaderr;
             }
-        } else if (!strcmp(argv[0],"logfile") && argc == 2) {
+        } else if (!strcmp(argv[0], "logfile") && argc == 2) {
             server.logfile = strdup(argv[1]);
-            if (!strcmp(server.logfile,"stdout")) server.logfile = NULL;
+            if (!strcmp(server.logfile, "stdout")) server.logfile = NULL;
             if (server.logfile) {
                 /* Test if we are able to open the file. The server will not
                  * be able to abort just for this problem later... */
@@ -543,7 +748,7 @@ static void loadServerConfig(char *filename)
                 }
                 fclose(fp);
             }
-        } else if (!strcmp(argv[0],"databases") && argc == 2) {
+        } else if (!strcmp(argv[0], "databases") && argc == 2) {
             server.dbnum = atoi(argv[1]);
             if (server.dbnum < 1) {
                 err = "Invalid number of databases";
@@ -607,195 +812,11 @@ static void sendReplyToClient(eEventLoop *el, int fd, void *privdata, int mask)
     }
 }
 
-static struct redisCommand *lookupCommand(char *name)
-{
-    int j = 0;
-    while (cmdTable[j].name != NULL) {
-        if (!strcmp(name, cmdTable[j].name)) return &cmdTable[j];
-        j++;
-    }
-    return NULL;
-}
-
 /* resetClient prepare the client to process the next command */
 static void resetClient(redisClient *c)
 {
     freeClientArgv(c);
     c->bulklen = -1;
-}
-
-/* If this function gets called we already read a whole
- * command, arguments are in the client argv/argc fields.
- * processCommand() execute the command or prepare the
- * server for a bulk read from the client.
- *
- * If 1 is returned the client is still alive and valid and
- * other operations can be performed by the caller. Otherwise
- * if 0 is returned the client was destroyed (i.e. after QUIT). */
-static int processCommand(redisClient *c)
-{
-    sdstolower(c->argv[0]);
-    /* The QUIT command is handled as a special case. Normal command
-     * procs are unable to close the client connection safely */
-    if (!strcmp(c->argv[0], "quit")) {
-        freeClient(c);
-        return 0;
-    }
-    struct redisCommand *cmd = lookupCommand(c->argv[0]);
-    if (!cmd) {
-        addReplySds(c, sdsnew("-ERR unknown command\r\n"));
-        resetClient(c);
-        return 1;
-    } else if (cmd->arity != c->argc) {
-        addReplySds(c, sdsnew("-ERR wrong number of arguments\r\n"));
-        resetClient(c);
-        return 1;
-    } else if (cmd->type == REDIS_CMD_BULK && c->bulklen == -1) {
-        int bulklen = atoi(c->argv[c->argc-1]);
-        sdsfree(c->argv[c->argc-1]);
-        if (bulklen < 0 || bulklen > 1024*1024*1024) {
-            c->argc--;
-            c->argv[c->argc] = NULL;
-            addReplySds(c, sdsnew("-ERR invalid bulk write count\r\n"));
-            resetClient(c);
-            return 1;
-        }
-        c->argv[c->argc-1] = NULL;
-        c->argc--;
-        c->bulklen = bulklen + 2; /* add two bytes for CR+LF */
-        /* It is possible that the bulk read is already in the
-         * buffer. Check this condition and handle it accordingly */
-        if ((signed)sdslen(c->querybuf) >= c->bulklen) {
-            c->argv[c->argc] = sdsnewlen(c->querybuf, c->bulklen-2);
-            c->argc++;
-            c->querybuf = sdsrange(c->querybuf, c->bulklen, -1);
-        } else {
-            return 1;
-        }
-    }
-    /* Exec the command */
-    cmd->proc(c);
-    resetClient(c);
-    return 1;
-}
-
-static void readQueryFromClient(eEventLoop *el, int fd, void *privdata, int mask)
-{
-    REDIS_NOTUSED(el);
-    REDIS_NOTUSED(mask);
-    redisClient *c = (redisClient*) privdata;
-    char buf[REDIS_QUERYBUF_LEN];
-    int nread = read(fd, buf, REDIS_QUERYBUF_LEN);
-    if (nread == -1) {
-        if (errno == EAGAIN) {
-            nread = 0;
-        } else {
-            redisLog(REDIS_DEBUG, "Reading from client: %s", strerror(errno));
-            freeClient(c);
-            return;
-        }
-    } else if (nread == 0) {
-        redisLog(REDIS_DEBUG, "Client closed connection");
-        freeClient(c);
-        return;
-    }
-    if (nread) {
-        c->querybuf = sdscatlen(c->querybuf, buf, nread);
-        c->lastinteraction = time(NULL);
-    } else {
-        return;
-    }
-
-again:
-    if (c->bulklen == -1) {
-        /* Read the first line of the query */
-        char *p = strchr(c->querybuf, '\n');
-        if (p) {
-            sds query = c->querybuf;
-            c->querybuf = sdsempty();
-            size_t querylen = 1 + (p - query);
-            if (sdslen(query) > querylen) {
-                /* leave data after the first line of the query in the buffer */
-                c->querybuf = sdscatlen(c->querybuf, query+querylen, sdslen(query)-querylen);
-            }
-            *p = '\0'; /* remove "\n" */
-            if (*(p-1) == '\r') *(p-1) = '\0'; /* and "\r" if any */
-            sdsupdatelen(query);
-
-            /* Now we can split the query in arguments */
-            if (sdslen(query) == 0) {
-                /* Ignore empty query */
-                sdsfree(query);
-                return;
-            }
-            int argc;
-            sds *argv = sdssplitlen(query, sdslen(query), " ", 1, &argc);
-            sdsfree(query);
-            if (argv == NULL) oom("Splitting query in token");
-            for (int j = 0; j < argc && j < REDIS_MAX_ARGS; j++) {
-                if (sdslen(argv[j])) {
-                    c->argv[c->argc] = argv[j];
-                    c->argc++;
-                } else {
-                    sdsfree(argv[j]);
-                }
-            }
-            free(argv);
-            /* Execute the command. If the client is still valid
-             * after processCommand() return and there is something
-             * on the query buffer try to process the next command. */
-            if (processCommand(c) && sdslen(c->querybuf)) goto again;
-            return;
-        } else if (sdslen(c->querybuf) >= 1024) {
-            redisLog(REDIS_DEBUG, "Client protocol error");
-            freeClient(c);
-            return;
-        }
-    } else {
-        /* Bulk read handling. Note that if we are at this point
-           the client already sent a command terminated with a newline,
-           we are reading the bulk data that is actually the last
-           argument of the command. */
-        int qbl = sdslen(c->querybuf);
-        if (c->bulklen <= qbl) {
-            /* Copy everything but the final CRLF as final argument */
-            c->argv[c->argc] = sdsnewlen(c->querybuf, c->bulklen-2);
-            c->argc++;
-            c->querybuf = sdsrange(c->querybuf, c->bulklen, -1);
-            processCommand(c);
-            return;
-        }
-    }
-}
-
-static int selectDb(redisClient *c, int id)
-{
-    if (id < 0 || id >= server.dbnum) return REDIS_ERR;
-    c->dict = server.dict[id];
-    return REDIS_OK;
-}
-
-static int createClient(int fd)
-{
-    netNonBlock(NULL, fd);
-    netTcpNoDelay(NULL, fd);
-    redisClient *c = malloc(sizeof(*c));
-    if (!c) return REDIS_ERR;
-    selectDb(c, 0);
-    c->fd = fd;
-    c->querybuf = sdsempty();
-    c->argc = 0;
-    c->bulklen = -1;
-    c->sentlen = 0;
-    c->lastinteraction = time(NULL);
-    if ((c->reply = listCreate()) == NULL) oom("listCreate");
-    listSetFreeMethod(c->reply, decrRefCount);
-    if (eCreateFileEvent(server.el, c->fd, E_READABLE, readQueryFromClient, c, NULL) == E_ERR) {
-        freeClient(c);
-        return REDIS_ERR;
-    }
-    if (!listAddNodeTail(server.clients, c)) oom("listAddNodeTail");
-    return REDIS_OK;
 }
 
 static void addReply(redisClient *c, redisObject *obj)
@@ -813,241 +834,210 @@ static void addReplySds(redisClient *client, sds s)
     decrRefCount(o);
 }
 
-static void acceptHandler(eEventLoop *el, int fd, void *privdata, int mask)
+static int selectDb(redisClient *client, int id)
+{
+    if (id < 0 || id >= server.dbnum) return REDIS_ERR;
+    client->dict = server.dict[id];
+    return REDIS_OK;
+}
+
+static struct redisCommand *lookupCommand(char *name)
+{
+    int j = 0;
+    while (cmdTable[j].name != NULL) {
+        if (!strcmp(name, cmdTable[j].name)) return &cmdTable[j];
+        j++;
+    }
+    return NULL;
+}
+
+/* If this function gets called we already read a whole
+ * command, arguments are in the client argv/argc fields.
+ * processCommand() execute the command or prepare the
+ * server for a bulk read from the client.
+ *
+ * If 1 is returned the client is still alive and valid and
+ * other operations can be performed by the caller. Otherwise
+ * if 0 is returned the client was destroyed (i.e. after QUIT). */
+static int processCommand(redisClient *client)
+{
+    sdstolower(client->argv[0]);
+    /* The QUIT command is handled as a special case. Normal command
+     * procs are unable to close the client connection safely */
+    if (!strcmp(client->argv[0], "quit")) {
+        freeClient(client);
+        return 0;
+    }
+    struct redisCommand *cmd = lookupCommand(client->argv[0]);
+    if (!cmd) {
+        addReplySds(client, sdsnew("-ERR unknown command\r\n"));
+        resetClient(client);
+        return 1;
+    } else if (cmd->argc != client->argc) {
+        addReplySds(client, sdsnew("-ERR wrong number of arguments\r\n"));
+        resetClient(client);
+        return 1;
+    } else if (cmd->type == REDIS_CMD_BULK && client->bulklen == -1) {
+        int bulklen = atoi(client->argv[client->argc-1]);
+        sdsfree(client->argv[client->argc-1]);
+        if (bulklen < 0 || bulklen > 1024*1024*1024) {
+            client->argc--;
+            client->argv[client->argc] = NULL;
+            addReplySds(client, sdsnew("-ERR invalid bulk write count\r\n"));
+            resetClient(client);
+            return 1;
+        }
+        client->argv[client->argc-1] = NULL;
+        client->argc--;
+        client->bulklen = bulklen + 2; /* add two bytes for CR+LF */
+        /* It is possible that the bulk read is already in the
+         * buffer. Check this condition and handle it accordingly */
+        if ((signed)sdslen(client->querybuf) >= client->bulklen) {
+            client->argv[client->argc] = sdsnewlen(client->querybuf, client->bulklen-2);
+            client->argc++;
+            client->querybuf = sdsrange(client->querybuf, client->bulklen, -1);
+        } else {
+            return 1;
+        }
+    }
+    /* Exec the command */
+    cmd->proc(client);
+    resetClient(client);
+    return 1;
+}
+//???????
+static void readQueryFromClient(eEventLoop *el, int fd, void *privdata, int mask)
 {
     REDIS_NOTUSED(el);
     REDIS_NOTUSED(mask);
-    REDIS_NOTUSED(privdata);
+    redisClient *client = (redisClient *) privdata;
+    char buf[REDIS_QUERYBUF_LEN];
+    int nread = read(fd, buf, REDIS_QUERYBUF_LEN);
+    if (nread == -1) {
+        if (errno == EAGAIN) {
+            nread = 0;
+        } else {
+            redisLog(REDIS_DEBUG, "Reading from client: %s", strerror(errno));
+            freeClient(client);
+            return;
+        }
+    } else if (nread == 0) {
+        redisLog(REDIS_DEBUG, "Client closed connection");
+        freeClient(client);
+        return;
+    }
+    if (nread) {
+        client->querybuf = sdscatlen(client->querybuf, buf, nread);
+        client->lastinteraction = time(NULL);
+    } else {
+        return;
+    }
 
+again:
+    if (client->bulklen == -1) {
+        /* Read the first line of the query */
+        char *p = strchr(client->querybuf, '\n');
+        if (p) {
+            sds query = client->querybuf;
+            client->querybuf = sdsempty();
+            size_t querylen = 1 + (p - query);
+            if (sdslen(query) > querylen) {
+                /* leave data after the first line of the query in the buffer */
+                client->querybuf = sdscatlen(client->querybuf, query+querylen, sdslen(query)-querylen);
+            }
+            *p = '\0'; /* remove "\n" */
+            if (*(p - 1) == '\r') *(p - 1) = '\0'; /* and "\r" if any */
+            sdsupdatelen(query);
+
+            /* Now we can split the query in arguments */
+            if (sdslen(query) == 0) {
+                /* Ignore empty query */
+                sdsfree(query);
+                return;
+            }
+            int argc;
+            sds *argv = sdssplitlen(query, sdslen(query), " ", 1, &argc);
+            sdsfree(query);
+            if (argv == NULL) oom("Splitting query in token");
+            for (int j = 0; j < argc && j < REDIS_MAX_ARGS; j++) {
+                if (sdslen(argv[j])) {
+                    client->argv[client->argc] = argv[j];
+                    client->argc++;
+                } else {
+                    sdsfree(argv[j]);
+                }
+            }
+            free(argv);
+            /* Execute the command. If the client is still valid
+             * after processCommand() return and there is something
+             * on the query buffer try to process the next command. */
+            if (processCommand(client) && sdslen(client->querybuf)) goto again;
+            return;
+        } else if (sdslen(client->querybuf) >= 1024) {
+            redisLog(REDIS_DEBUG, "Client protocol error");
+            freeClient(client);
+            return;
+        }
+    } else {
+        /* Bulk read handling. Note that if we are at this point
+           the client already sent a command terminated with a newline,
+           we are reading the bulk data that is actually the last
+           argument of the command. */
+        if (client->bulklen <= (int)sdslen(client->querybuf)) {
+            /* Copy everything but the final CRLF as final argument */
+            client->argv[client->argc] = sdsnewlen(client->querybuf, client->bulklen-2);
+            client->argc++;
+            client->querybuf = sdsrange(client->querybuf, client->bulklen, -1);
+            processCommand(client);
+            return;
+        }
+    }
+}
+
+static int createClient(int fd)
+{
+    netNonBlock(NULL, fd);
+    netTcpNoDelay(NULL, fd);
+    redisClient *client = malloc(sizeof(struct redisClient));
+    if (!client) return REDIS_ERR;
+    client->fd = fd;
+    selectDb(client, 0);
+    client->querybuf = sdsempty();
+    client->argc = 0;
+    client->bulklen = -1;
+    if ((client->reply = listCreate()) == NULL) oom("listCreate");
+    listSetFreeMethod(client->reply, decrRefCount);
+    client->sentlen = 0;
+    client->lastinteraction = time(NULL);
+    if (eCreateFileEvent(server.el, client->fd, E_READABLE, readQueryFromClient, client, NULL) == E_ERR) {
+        freeClient(client);
+        return REDIS_ERR;
+    }
+    if (!listAddNodeTail(server.clients, client)) oom("listAddNodeTail");
+    return REDIS_OK;
+}
+
+static void acceptHandler(eEventLoop *el, int fd, void *privdata, int mask)
+{
+    REDIS_NOTUSED(el);
+    REDIS_NOTUSED(privdata);
+    REDIS_NOTUSED(mask);
     int cport;
     char cip[128];
     int cfd = netAccept(server.neterr, fd, cip, &cport);
-    if (cfd == E_ERR) {
+    if (cfd == NET_ERR) {
         redisLog(REDIS_DEBUG, "Accepting client connection: %s", server.neterr);
         return;
     }
     redisLog(REDIS_DEBUG, "Accepted %s:%d", cip, cport);
     if (createClient(cfd) == REDIS_ERR) {
         redisLog(REDIS_WARNING, "Error allocating resources for the client");
-        close(cfd); /* May be already closed, just ingore errors */
+        close(cfd); /* May be already closed, just ignore errors */
         return;
     }
 }
 
-/*============================ DB saving/loading ============================ */
-
-/* Save the DB on disk. Return REDIS_ERR on error, REDIS_OK on success */
-static int saveDb(char *filename)
-{
-    char tmpfile[256];
-    snprintf(tmpfile, 256, "temp-%d.%ld.rdb", (int)time(NULL), (long int)random());
-    FILE *fp = fopen(tmpfile, "w");
-    if (!fp) {
-        redisLog(REDIS_WARNING, "Failed saving the DB: %s", strerror(errno));
-        return REDIS_ERR;
-    }
-    if (fwrite("REDIS0000", 9, 1, fp) == 0) goto werr;
-    dictIterator *di = NULL;
-    for (int j = 0; j < server.dbnum; j++) {
-        dict *dict = server.dict[j];
-        if (dictGetHashTableUsed(dict) == 0) continue;
-        di = dictGetIterator(dict);
-        if (!di) {
-            fclose(fp);
-            return REDIS_ERR;
-        }
-
-        /* Write the SELECT DB opcode */
-        uint8_t type = REDIS_SELECTDB;
-        uint32_t len = htonl(j);
-        if (fwrite(&type,1,1,fp) == 0) goto werr;
-        if (fwrite(&len,4,1,fp) == 0) goto werr;
-
-        /* Iterate this DB writing every entry */
-        dictEntry *de;
-        while ((de = dictNext(di)) != NULL) {
-            sds key = dictGetEntryKey(de);
-            redisObject *o = dictGetEntryVal(de);
-            type = o->type;
-            len = htonl(sdslen(key));
-            if (fwrite(&type,1,1,fp) == 0) goto werr;
-            if (fwrite(&len,4,1,fp) == 0) goto werr;
-            if (fwrite(key,sdslen(key),1,fp) == 0) goto werr;
-            if (type == REDIS_STRING) {
-                /* Save a string value */
-                sds sval = o->ptr;
-                len = htonl(sdslen(sval));
-                if (fwrite(&len,4,1,fp) == 0) goto werr;
-                if (fwrite(sval,sdslen(sval),1,fp) == 0) goto werr;
-            } else if (type == REDIS_LIST) {
-                /* Save a list value */
-                list *list = o->ptr;
-                listNode *ln = list->head;
-                len = htonl(listLength(list));
-                if (fwrite(&len,4,1,fp) == 0) goto werr;
-                while (ln) {
-                    redisObject *eleobj = listNodeValue(ln);
-                    len = htonl(sdslen(eleobj->ptr));
-                    if (fwrite(&len,4,1,fp) == 0) goto werr;
-                    if (fwrite(eleobj->ptr,sdslen(eleobj->ptr),1,fp) == 0) goto werr;
-                    ln = ln->next;
-                }
-            } else {
-                assert(0 != 0);
-            }
-        }
-        dictReleaseIterator(di);
-    }
-    /* EOF opcode */
-    uint8_t type = REDIS_EOF;
-    if (fwrite(&type,1,1,fp) == 0) goto werr;
-    fclose(fp);
-    
-    /* Use RENAME to make sure the DB file is changed atomically only
-     * if the generate DB file is ok. */
-    if (rename(tmpfile,filename) == -1) {
-        redisLog(REDIS_WARNING, "Error moving temp DB file on the final destionation: %s", strerror(errno));
-        unlink(tmpfile);
-        return REDIS_ERR;
-    }
-    redisLog(REDIS_NOTICE, "DB saved on disk");
-    server.dirty = 0;
-    server.lastsave = time(NULL);
-    return REDIS_OK;
-
-werr:
-    fclose(fp);
-    redisLog(REDIS_WARNING, "Error saving DB on disk: %s", strerror(errno));
-    if (di) dictReleaseIterator(di);
-    return REDIS_ERR;
-}
-
-static int saveDbBackground(char *filename)
-{
-    if (server.bgsaveinprogress) return REDIS_ERR;
-    pid_t childpid;
-    if ((childpid = fork()) == 0) {
-        /* Child */
-        close(server.fd);
-        if (saveDb(filename) == REDIS_OK) exit(0);
-        else exit(1);
-    } else {
-        /* Parent */
-        redisLog(REDIS_NOTICE, "Background saving started by pid %d", childpid);
-        server.bgsaveinprogress = 1;
-        return REDIS_OK;
-    }
-    return REDIS_OK;  /* unreached */
-}
-
-static int loadDb(char *filename)
-{
-    FILE *fp = fopen(filename, "r");
-    if (!fp) return REDIS_ERR;
-    char buf[REDIS_LOADBUF_LEN];    /* Try to use this buffer instead of */
-    if (fread(buf,9,1,fp) == 0) goto eoferr;
-    if (memcmp(buf,"REDIS0000",9) != 0) {
-        fclose(fp);
-        redisLog(REDIS_WARNING, "Wrong signature trying to load DB from file");
-        return REDIS_ERR;
-    }
-    char vbuf[REDIS_LOADBUF_LEN];   /* malloc() when the element is small */
-    char *key = NULL, *val = NULL;
-    dict *dict = server.dict[0];
-    while (1) {
-        /* Read type. */
-        uint8_t type;
-        if (fread(&type,1,1,fp) == 0) goto eoferr;
-        if (type == REDIS_EOF) break;
-        /* Handle SELECT DB opcode as a special case */
-        if (type == REDIS_SELECTDB) {
-        	uint32_t dbid;
-            if (fread(&dbid,4,1,fp) == 0) goto eoferr;
-            dbid = ntohl(dbid);
-            if (dbid >= (unsigned)server.dbnum) {
-                redisLog(REDIS_WARNING,"FATAL: Data file was created with a Redis server "
-                		"compiled to handle more than %d databases. Exiting\n", server.dbnum);
-                exit(1);
-            }
-            dict = server.dict[dbid];
-            continue;
-        }
-        /* Read key */
-        uint32_t klen;
-        if (fread(&klen,4,1,fp) == 0) goto eoferr;
-        klen = ntohl(klen);
-        if (klen <= REDIS_LOADBUF_LEN) {
-            key = buf;
-        } else {
-            key = malloc(klen);
-            if (!key) oom("Loading DB from file");
-        }
-        if (fread(key,klen,1,fp) == 0) goto eoferr;
-        redisObject *o;
-        if (type == REDIS_STRING) {
-            /* Read string value */
-        	uint32_t vlen;
-            if (fread(&vlen,4,1,fp) == 0) goto eoferr;
-            vlen = ntohl(vlen);
-            if (vlen <= REDIS_LOADBUF_LEN) {
-                val = vbuf;
-            } else {
-                val = malloc(vlen);
-                if (!val) oom("Loading DB from file");
-            }
-            if (fread(val,vlen,1,fp) == 0) goto eoferr;
-            o = createObject(REDIS_STRING, sdsnewlen(val,vlen));
-        } else if (type == REDIS_LIST) {
-            /* Read list value */
-            uint32_t listlen;
-            if (fread(&listlen,4,1,fp) == 0) goto eoferr;
-            listlen = ntohl(listlen);
-            o = createListObject();
-            /* Load every single element of the list */
-            while (listlen--) {
-                uint32_t vlen;
-                if (fread(&vlen,4,1,fp) == 0) goto eoferr;
-                vlen = ntohl(vlen);
-                if (vlen <= REDIS_LOADBUF_LEN) {
-                    val = vbuf;
-                } else {
-                    val = malloc(vlen);
-                    if (!val) oom("Loading DB from file");
-                }
-                if (fread(val,vlen,1,fp) == 0) goto eoferr;
-                redisObject *ele = createObject(REDIS_STRING, sdsnewlen(val,vlen));
-                if (!listAddNodeTail((list*)o->ptr, ele)) oom("listAddNodeTail");
-                /* free the temp buffer if needed */
-                if (val != vbuf) free(val);
-                val = NULL;
-            }
-        } else {
-            assert(0 != 0);
-        }
-        /* Add the new object in the hash table */
-        int retval = dictAdd(dict, sdsnewlen(key,klen), o);
-        if (retval == DICT_ERR) {
-            redisLog(REDIS_WARNING, "Loading DB, duplicated key found! Unrecoverable error, exiting now.");
-            exit(1);
-        }
-        /* Iteration cleanup */
-        if (key != buf) free(key);
-        if (val != vbuf) free(val);
-        key = val = NULL;
-    }
-    fclose(fp);
-    return REDIS_OK;
-
-eoferr: /* unexpected end of file is handled here with a fatal exit */
-    if (key != buf) free(key);
-    if (val != vbuf) free(val);
-    redisLog(REDIS_WARNING, "Short read loading DB. Unrecoverable error, exiting now.");
-    exit(1);
-    return REDIS_ERR; /* Just to avoid warning */
-}
-
-/*================================== Commands =============================== */
-
+/*============================= Commands ============================== */
 static void pingCommand(redisClient *client)
 {
     addReply(client, sharedObjs.pong);
@@ -1526,9 +1516,9 @@ static void ltrimCommand(redisClient *client) {
     }
 }
 
-/* =================================== Main! ================================ */
+/* ============================= Main! ============================== */
 int main(int argc, char **argv) {
-    initServerConfig();
+	initServerConfig();
     initServer();
     if (argc == 2) {
         ResetServerSaveParams();
