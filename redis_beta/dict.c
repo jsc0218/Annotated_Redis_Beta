@@ -305,7 +305,7 @@ void dictReleaseIterator(dictIterator *iter)
 
 /* Return a random entry from the hash table. Useful to
  * implement randomized algorithms */
-dictEntry *dictGetRandomKey(dict *ht)
+dictEntry *dictGetRandomEntry(dict *ht)
 {
     if (ht->size == 0) return NULL;
     dictEntry *he;

@@ -87,7 +87,7 @@ dictEntry * dictFind(dict *ht, const void *key);
 dictIterator *dictGetIterator(dict *ht);
 dictEntry *dictNext(dictIterator *iter);
 void dictReleaseIterator(dictIterator *iter);
-dictEntry *dictGetRandomKey(dict *ht);
+dictEntry *dictGetRandomEntry(dict *ht);
 void dictPrintStats(dict *ht);
 unsigned int dictGenHashFunction(const unsigned char *buf, int len);
 
