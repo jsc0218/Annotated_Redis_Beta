@@ -171,8 +171,9 @@ sds sdstrim(sds s, const char *cset)
     sh->len = len;
     return s;
 }
-// ????????
-sds sdsrange(sds s, long start, long end) {
+
+sds sdsrange(sds s, long start, long end)
+{
     size_t len = sdslen(s);
     if (len == 0) return s;
     if (start < 0) {
@@ -191,7 +192,7 @@ sds sdsrange(sds s, long start, long end) {
     } else {
         start = 0;
     }
-    struct sdshdr *sh = (void*) (s - sizeof(struct sdshdr));
+    struct sdshdr *sh = (void *) (s - sizeof(struct sdshdr));
     if (start != 0) memmove(sh->buf, sh->buf+start, newlen);
     sh->buf[newlen] = '\0';
     sh->free = sh->free + (sh->len - newlen);

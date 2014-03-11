@@ -38,11 +38,11 @@ static void ltrimCommand(redisClient *client);
 /* Global vars */
 static struct redisServer server; /* server global state */
 static struct redisCommand cmdTable[] = {
-    {"get",getCommand,2,REDIS_CMD_INLINE},
-    {"set",setCommand,3,REDIS_CMD_BULK},
-    {"setnx",setnxCommand,3,REDIS_CMD_BULK},
-    {"del",delCommand,2,REDIS_CMD_INLINE},
-    {"exists",existsCommand,2,REDIS_CMD_INLINE},
+    {"get", getCommand, 2, REDIS_CMD_INLINE},
+    {"set", setCommand, 3, REDIS_CMD_BULK},
+    {"setnx", setnxCommand, 3, REDIS_CMD_BULK},
+    {"del", delCommand, 2, REDIS_CMD_INLINE},
+    {"exists", existsCommand, 2, REDIS_CMD_INLINE},
     {"incr",incrCommand,2,REDIS_CMD_INLINE},
     {"decr",decrCommand,2,REDIS_CMD_INLINE},
     {"rpush",rpushCommand,3,REDIS_CMD_BULK},
@@ -61,7 +61,7 @@ static struct redisCommand cmdTable[] = {
     {"keys",keysCommand,2,REDIS_CMD_INLINE},
     {"dbsize",dbsizeCommand,1,REDIS_CMD_INLINE},
     {"ping", pingCommand, 1, REDIS_CMD_INLINE},
-    {"echo",echoCommand,2,REDIS_CMD_BULK},
+    {"echo", echoCommand, 2, REDIS_CMD_BULK},
     {"save",saveCommand,1,REDIS_CMD_INLINE},
     {"bgsave",bgsaveCommand,1,REDIS_CMD_INLINE},
     {"shutdown",shutdownCommand,1,REDIS_CMD_INLINE},
@@ -846,7 +846,7 @@ static void resetClient(redisClient *client)
     freeClientArgv(client);
     client->bulklen = -1;
 }
-//??????
+
 /* If this function gets called we already read a whole
  * command, arguments are in the client argv/argc fields.
  * processCommand() execute the command or prepare the
@@ -899,7 +899,7 @@ static int processCommand(redisClient *client)
     resetClient(client);
     return 1;
 }
-//???????
+
 static void readQueryFromClient(eEventLoop *el, int fd, void *privdata, int mask)
 {
     REDIS_NOTUSED(el);
@@ -942,7 +942,6 @@ again:
             *p = '\0'; /* remove "\n" */
             if (*(p - 1) == '\r') *(p - 1) = '\0'; /* and "\r" if any */
             sdsupdatelen(query);
-
             /* Now we can split the query in arguments */
             if (sdslen(query) == 0) {
                 /* Ignore empty query */
@@ -1037,14 +1036,16 @@ static void pingCommand(redisClient *client)
     addReply(client, sharedObjs.pong);
 }
 
-static void echoCommand(redisClient *client) {
+static void echoCommand(redisClient *client)
+{
     addReplySds(client, sdscatprintf(sdsempty(), "%d\r\n", (int)sdslen(client->argv[1])));
     addReplySds(client, client->argv[1]);
     addReply(client, sharedObjs.crlf);
     client->argv[1] = NULL;
 }
 
-static void setGenericCommand(redisClient *client, int nx) {
+static void setGenericCommand(redisClient *client, int nx)
+{
     redisObject *obj = createObject(REDIS_STRING, client->argv[2]);
     client->argv[2] = NULL;
     int retval = dictAdd(client->dict, client->argv[1], obj);
@@ -1059,18 +1060,21 @@ static void setGenericCommand(redisClient *client, int nx) {
     addReply(client, sharedObjs.ok);
 }
 
-static void setCommand(redisClient *client) {
+static void setCommand(redisClient *client)
+{
     return setGenericCommand(client, 0);
 }
 
-static void setnxCommand(redisClient *client) {
+static void setnxCommand(redisClient *client)
+{
     return setGenericCommand(client, 1);
 }
 
-static void getCommand(redisClient *client) {
+static void getCommand(redisClient *client)
+{
     dictEntry *de = dictFind(client->dict, client->argv[1]);
     if (de == NULL) {
-        addReply(client,sharedObjs.nil);
+        addReply(client, sharedObjs.nil);
     } else {
         redisObject *obj = dictGetEntryVal(de);
         if (obj->type != REDIS_STRING) {
@@ -1084,12 +1088,14 @@ static void getCommand(redisClient *client) {
     }
 }
 
-static void delCommand(redisClient *client) {
+static void delCommand(redisClient *client)
+{
     if (dictDelete(client->dict, client->argv[1]) == DICT_OK) server.dirty++;
     addReply(client, sharedObjs.ok);
 }
 
-static void existsCommand(redisClient *client) {
+static void existsCommand(redisClient *client)
+{
     dictEntry *de = dictFind(client->dict, client->argv[1]);
     if (de == NULL) addReply(client, sharedObjs.zero);
     else addReply(client, sharedObjs.one);
