@@ -16,3 +16,5 @@ It is worth learning the design idea of redis via the first version. I have made
 5. Unify the code format, including brackets and spaces.
 
 Fortunately, the codes are very short after these changes (3,000 code lines). Enjoy it!
+
+Several notes on Redis are available on my blog: http://blog.csdn.net/jsc0218/article/details/21280821.
